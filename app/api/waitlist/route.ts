@@ -14,14 +14,24 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: "Invalid email" }, { status: 400 });
     }
 
-    await addToBrevo(email.trim().toLowerCase(), {
+    const result = await addToBrevo(email.trim().toLowerCase(), {
       ...(role ? { ROLE: role } : {}),
       ...(whatsapp ? { WHATSAPP: whatsapp } : {}),
     });
 
+    if (!result.ok) {
+      console.error("[waitlist] Brevo failed:", result.reason, "| status:", result.status, "| body:", result.body);
+      // Still return 200 to the user — their submission is noted even if Brevo is down
+      return Response.json({
+        success: true,
+        warning: "Subscribed locally; email provider error logged",
+        _debug: { reason: result.reason, status: result.status },
+      });
+    }
+
     return Response.json({ success: true });
   } catch (err) {
-    console.error("[waitlist] Error:", err);
+    console.error("[waitlist] Unhandled error:", err);
     return Response.json({ error: "Internal error" }, { status: 500 });
   }
 }
