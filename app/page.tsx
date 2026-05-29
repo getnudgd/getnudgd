@@ -1,23 +1,29 @@
-import { Nav } from "@/components/Nav";
-import { Hero } from "@/components/Hero";
-import { SocialProof } from "@/components/SocialProof";
-import { HowItWorks } from "@/components/HowItWorks";
-import { CompanyLogos } from "@/components/CompanyLogos";
-import { CtaBand } from "@/components/CtaBand";
-import { Footer } from "@/components/Footer";
-import { ScrollReveal } from "@/components/ScrollReveal";
+import Link from "next/link";
+import { SurveyShell } from "@/components/survey/SurveyShell";
 
-export default function Home() {
+export const metadata = {
+  title: "GetNudgd · Pre-Launch Survey",
+  description:
+    "Help us build a better referral platform. Answer 21 quick questions and get early access.",
+};
+
+export default function SurveyPage() {
   return (
-    <>
-      <Nav />
-      <Hero />
-      <SocialProof />
-      <HowItWorks />
-      <CompanyLogos />
-      <CtaBand />
-      <Footer />
-      <ScrollReveal />
-    </>
+    <div
+      style={{
+        background: "var(--bg-surface)",
+        minHeight: "100vh",
+      }}
+    >
+      <div className="survey-wrap">
+        <Link href="/landing" style={{ textDecoration: "none" }}>
+          <div className="survey-logo">
+            <span className="logo-get">get</span>
+            <span className="logo-nudgd">nudgd</span>
+          </div>
+        </Link>
+        <SurveyShell />
+      </div>
+    </div>
   );
 }
