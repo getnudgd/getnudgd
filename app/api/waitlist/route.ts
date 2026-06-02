@@ -1,7 +1,11 @@
 import { NextRequest } from "next/server";
 import { addToBrevo } from "@/lib/brevo";
+import { guardRequest } from "@/lib/api-security";
 
 export async function POST(req: NextRequest) {
+  const blocked = guardRequest(req);
+  if (blocked) return blocked;
+
   try {
     const body = await req.json();
     const { email, role, whatsapp } = body as {

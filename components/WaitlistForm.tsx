@@ -28,7 +28,10 @@ export function WaitlistForm({ variant = "hero" }: { variant?: Variant }) {
     try {
       await fetch("/api/waitlist", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-secret": process.env.NEXT_PUBLIC_API_SECRET ?? "",
+        },
         body: JSON.stringify({ email: val, role }),
       });
     } catch {
