@@ -19,7 +19,10 @@ export async function submitToSheets(data: object): Promise<GasResult> {
       // GAS requires redirect following (302 → final URL)
       redirect: "follow",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        secret: process.env.NEXT_PUBLIC_API_SECRET,
+        ...( data as object ),
+      }),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
