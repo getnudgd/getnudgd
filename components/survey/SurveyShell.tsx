@@ -76,16 +76,35 @@ export function SurveyShell() {
   }
 
   async function handleSubmit() {
-    syncText(current);
+    // Build final answers: merge React state with ALL text ref values directly
+    // (setAnswers is async so we can't rely on the state being up-to-date yet)
+    const textQNums = [1, 3, 20, 21];
+    const finalAnswers: Answers = { ...answers };
+    for (const qNum of textQNums) {
+      const el = textRefs.current[qNum];
+      if (el && el.value.trim()) {
+        finalAnswers[`q${qNum}`] = el.value.trim();
+      }
+    }
+    // Also capture Q21 contact field (stored under key 211)
+    const q21Contact = textRefs.current[211];
+    if (q21Contact && q21Contact.value.trim()) {
+      finalAnswers["q21_contact"] = q21Contact.value.trim();
+    }
+
     setSubmitted(true);
+
     try {
-      await fetch("/api/survey", {
+      const res = await fetch("/api/survey", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answers, submittedAt: new Date().toISOString() }),
+        body: JSON.stringify({ answers: finalAnswers, submittedAt: new Date().toISOString() }),
       });
-    } catch {
-      // fail silently
+      if (!res.ok) {
+        console.error("[survey] API error:", res.status, await res.text());
+      }
+    } catch (err) {
+      console.error("[survey] Network error:", err);
     }
   }
 
