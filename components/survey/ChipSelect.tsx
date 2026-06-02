@@ -22,7 +22,8 @@ export function ChipSelect({ options, selected, multi = false, onChange }: ChipS
         onChange([...current, value]);
       }
     } else {
-      onChange(value);
+      // Deselect if clicking the already-selected chip
+      onChange(selected === value ? "" : value);
     }
   }
 
