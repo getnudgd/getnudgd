@@ -475,8 +475,8 @@ section.band.alt {
   display: flex; flex-direction: column;
 }
 .outcome-col.ghost {
-  background: var(--bg-card);
-  border: 0.5px solid var(--border);
+  background: linear-gradient(160deg, #fff5f5 0%, #fff 70%);
+  border: 0.5px solid #fecaca;
 }
 .outcome-col.bright {
   background: linear-gradient(160deg, var(--indigo-50) 0%, #fff 70%);
@@ -486,7 +486,7 @@ section.band.alt {
   font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
   text-transform: uppercase; margin-bottom: 28px;
 }
-.outcome-col.ghost .outcome-lbl { color: var(--ink-300); }
+.outcome-col.ghost .outcome-lbl { color: #f87171; }
 .outcome-col.bright .outcome-lbl { color: var(--indigo-500); }
 .outcome-step {
   font-family: var(--font-display);
@@ -503,8 +503,9 @@ section.band.alt {
   padding: 7px 18px; border-radius: 999px;
   font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
 }
-.outcome-col.ghost .outcome-pill { background: var(--ink-100); color: var(--ink-400); }
+.outcome-col.ghost .outcome-pill { background: #fee2e2; color: #dc2626; }
 .outcome-col.bright .outcome-pill { background: var(--indigo-100); color: var(--indigo-700); }
+.outcome-emoji { font-size: 40px; margin-bottom: 16px; }
 
 /* ============================================================
    COMPANY LOGOS

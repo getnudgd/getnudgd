@@ -23,10 +23,6 @@ export function StarRating({ value, onChange }: StarRatingProps) {
           </button>
         ))}
       </div>
-      <div className="rating-labels">
-        <span>Every time I apply ✅</span>
-        <span>Useless 🙅</span>
-      </div>
     </>
   );
 }

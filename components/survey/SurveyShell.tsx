@@ -8,7 +8,7 @@ import { ThankYou } from "./ThankYou";
 
 const TOTAL = 21;
 // Q1–Q7 are all mandatory (change 3: extended from Q6 to Q7)
-const MANDATORY = [1, 2, 3, 4, 5, 6, 7];
+const MANDATORY = [1, 2, 3, 4, 5, 6, 7, 13];
 // Text-input question numbers
 const TEXT_QS = [1, 3, 20];
 

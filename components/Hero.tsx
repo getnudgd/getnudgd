@@ -35,9 +35,9 @@ export function Hero() {
           </span>
 
           <h1>
-            Ek referral.
+            Ek referral
             <br />
-            <em>Wahi kaafi hai.</em>
+            <em>Wahi kaafi hai</em>
           </h1>
 
           <p className="hero-sub">
