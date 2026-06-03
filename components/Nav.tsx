@@ -6,7 +6,7 @@ export function Nav() {
     <header className="wl-nav">
       <div className="wl-nav-inner">
         <Link href="/" className="wl-brand">
-          <Image src="/logo-light.png" alt="getnudgd" height={28} width={140} style={{ objectFit: "contain" }} priority />
+          <Image src="/logo-indigo.svg" alt="getnudgd" height={28} width={140} style={{ objectFit: "contain" }} priority />
         </Link>
 <a href="#waitlist" className="btn btn-primary btn-sm">
           Get notified

@@ -1,11 +1,10 @@
+import Image from "next/image";
+
 export function Footer() {
   return (
     <footer className="foot">
       <div className="foot-inner">
-        <div className="wl-brand">
-          <span className="wl-brand-get">get</span>
-          <span className="wl-brand-nudgd">nudgd</span>
-        </div>
+        <Image src="/logo-indigo.svg" alt="getnudgd" height={24} width={120} style={{ objectFit: "contain" }} />
         <div className="foot-meta">
           getnudgd.com · <b>Pre-launch</b> · Something real is coming.
         </div>

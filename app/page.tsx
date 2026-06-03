@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import { SurveyShell } from "@/components/survey/SurveyShell";
 
 export const metadata = {
@@ -18,8 +19,7 @@ export default function SurveyPage() {
       <div className="survey-wrap">
         <Link href="/landing" style={{ textDecoration: "none" }}>
           <div className="survey-logo">
-            <span className="logo-get">get</span>
-            <span className="logo-nudgd">nudgd</span>
+            <Image src="/logo-indigo.svg" alt="getnudgd" height={28} width={140} style={{ objectFit: "contain" }} priority />
           </div>
         </Link>
         <SurveyShell />

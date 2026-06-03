@@ -1,13 +1,16 @@
+import Image from "next/image";
+
+const heights: Record<string, number> = { sm: 20, md: 24, lg: 32 };
+const widths: Record<string, number> = { sm: 100, md: 120, lg: 160 };
+
 export function Logo({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
-  const sizes = {
-    sm: "text-lg",
-    md: "text-xl",
-    lg: "text-3xl",
-  };
   return (
-    <span className={`font-display tracking-tight ${sizes[size]}`}>
-      <span className="wl-brand-get">get</span>
-      <span className="wl-brand-nudgd">nudgd</span>
-    </span>
+    <Image
+      src="/logo-indigo.svg"
+      alt="getnudgd"
+      height={heights[size]}
+      width={widths[size]}
+      style={{ objectFit: "contain" }}
+    />
   );
 }
