@@ -19,7 +19,7 @@ export default function SurveyPage() {
       <div className="survey-wrap">
         <Link href="/landing" style={{ textDecoration: "none" }}>
           <div className="survey-logo">
-            <Image src="/logo-indigo.svg" alt="getnudgd" height={28} width={140} style={{ objectFit: "contain" }} priority />
+            <Image src="/logo-light.png" alt="getnudgd" height={28} width={140} style={{ objectFit: "contain" }} priority />
           </div>
         </Link>
         <SurveyShell />
