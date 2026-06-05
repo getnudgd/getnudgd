@@ -536,6 +536,8 @@ section.band.alt {
   border-radius: 20px; padding: 36px 32px;
   border: 0.5px solid var(--border); background: #fff;
   display: flex; flex-direction: column; min-height: 100%;
+  box-shadow: 0 1px 3px rgba(17,24,39,0.04);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .side.seeker { background: linear-gradient(170deg,var(--indigo-50) 0%,#fff 65%); border-color: var(--indigo-100); }
 .side.referrer { background: linear-gradient(170deg,var(--amber-50) 0%,#fff 65%); border-color: var(--amber-200); }
@@ -928,10 +930,8 @@ textarea.q-input { resize: vertical; min-height: 96px; }
 
 /* ============================================================
    ANIMATION 5 — CARD HOVER LIFT on .side cards (pure CSS)
+   transition + initial box-shadow are set on .side above
    ============================================================ */
-.side {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
 .side:hover {
   transform: translateY(-5px);
   box-shadow: 0 12px 32px rgba(17,24,39,0.12);
