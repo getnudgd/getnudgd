@@ -1,4 +1,5 @@
 import { WaitlistForm } from "./WaitlistForm";
+import { AnimatedHeadline } from "./AnimatedHeadline";
 
 export function Hero() {
   return (
@@ -34,11 +35,13 @@ export function Hero() {
             </span>
           </span>
 
-          <h1>
-            Ek referral
-            <br />
-            <em>Wahi kaafi hai</em>
-          </h1>
+          <AnimatedHeadline
+            lines={[
+              { words: ["Ek", "referral"] },
+              { words: ["Wahi", "kaafi", "hai"], em: true },
+            ]}
+            className="hero-h1"
+          />
 
           <p className="hero-sub">
             Not a job board. A matchmaking platform. We connect you with someone

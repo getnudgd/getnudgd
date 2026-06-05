@@ -12,7 +12,7 @@ const COMPANIES = [
 
 export function CompanyLogos() {
   return (
-    <section className="logos reveal">
+    <section className="logos">
       <span className="label">Get referred into companies like</span>
       <div className="logos-row">
         {COMPANIES.map((company) => (

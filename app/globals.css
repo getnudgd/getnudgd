@@ -870,6 +870,143 @@ textarea.q-input { resize: vertical; min-height: 96px; }
 .ty-foot span { color: var(--indigo-600); font-weight: 600; }
 
 /* ============================================================
+   HERO H1 — used by AnimatedHeadline (Animation 1)
+   ============================================================ */
+.hero-h1 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: clamp(40px, 6.2vw, 64px);
+  line-height: 1.05;
+  letter-spacing: -1.5px;
+  color: var(--ink-900);
+  margin: 22px 0 18px;
+}
+.hero-h1 em { font-style: normal; color: var(--indigo-600); }
+
+/* ============================================================
+   OUTCOME EMOJI (HowItWorks user addition)
+   ============================================================ */
+.outcome-emoji {
+  font-size: 32px;
+  margin-bottom: 16px;
+  line-height: 1;
+}
+
+/* ============================================================
+   ANIMATION 4 — MARQUEE TICKER (pure CSS)
+   ============================================================ */
+.marquee-strip {
+  overflow: hidden;
+  background: var(--ink-100);
+  padding: 14px 0;
+  border-top: 0.5px solid var(--border);
+  border-bottom: 0.5px solid var(--border);
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee 35s linear infinite;
+  will-change: transform;
+}
+.marquee-item {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--ink-500);
+  padding: 0 8px;
+}
+.marquee-sep {
+  margin: 0 12px;
+  color: var(--indigo-600);
+  font-weight: 700;
+}
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+/* ============================================================
+   ANIMATION 5 — CARD HOVER LIFT on .side cards (pure CSS)
+   ============================================================ */
+.side {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.side:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 12px 32px rgba(17,24,39,0.12);
+}
+
+/* ============================================================
+   ANIMATION 6 — FORM FOCUS GLOW on email-row (pure CSS)
+   ============================================================ */
+.email-row:focus-within {
+  border-radius: 12px;
+  outline: none;
+}
+.email-row:focus-within .email-input {
+  border-color: var(--indigo-600);
+  box-shadow: 0 0 0 3px rgba(79,70,229,0.15);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* ============================================================
+   ANIMATION 7 — SVG CHECKMARK DRAW (pure CSS)
+   ============================================================ */
+.checkmark-svg {
+  width: 52px;
+  height: 52px;
+  display: block;
+  margin: 0 auto 16px;
+}
+/* Circle: circumference ≈ 2π×20 ≈ 125.66 */
+.checkmark-circle {
+  stroke-dasharray: 126;
+  stroke-dashoffset: 126;
+  animation: drawCircle 0.4s ease-out 0.1s forwards;
+}
+/* Tick: estimated path length ≈ 27 */
+.checkmark-tick {
+  stroke-dasharray: 27;
+  stroke-dashoffset: 27;
+  animation: drawTick 0.3s ease-out 0.5s forwards;
+}
+@keyframes drawCircle {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes drawTick {
+  to { stroke-dashoffset: 0; }
+}
+
+/* ============================================================
+   ANIMATION 8 — FORM ROW SHAKE on invalid submit (pure CSS)
+   ============================================================ */
+@keyframes shake {
+  0%   { transform: translateX(0); }
+  20%  { transform: translateX(-8px); }
+  40%  { transform: translateX(8px); }
+  60%  { transform: translateX(-6px); }
+  80%  { transform: translateX(6px); }
+  100% { transform: translateX(0); }
+}
+.email-row.shake { animation: shake 0.4s ease; }
+/* Survey card shake (existing, reuses same keyframe) */
+.q-card.q-error { animation: shake 0.3s ease; }
+
+/* ============================================================
+   PREFERS-REDUCED-MOTION — disable all animations globally
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+  .marquee-track { animation: none; }
+}
+
+/* ============================================================
    RESPONSIVE
    ============================================================ */
 @media (max-width: 960px) {
@@ -885,7 +1022,7 @@ textarea.q-input { resize: vertical; min-height: 96px; }
   .sides { grid-template-columns: 1fr; }
   .email-row { grid-template-columns: 1fr; }
   .hero { padding: 40px 24px 24px; }
-  .hero h1 { letter-spacing: -1px; }
+  .hero h1, .hero-h1 { letter-spacing: -1px; }
   section.band { padding: 64px 24px; }
 }
 @media (max-width: 600px) {

@@ -2,7 +2,7 @@ export function HowItWorks() {
   return (
     <>
       {/* Before / After Contrast */}
-      <section className="band alt reveal">
+      <section className="band alt">
         <div className="band-head">
           <h2>Same ambition, Completely Different Outcome</h2>
         </div>
@@ -29,7 +29,7 @@ export function HowItWorks() {
       </section>
 
       {/* Two Sides */}
-      <section className="band alt reveal">
+      <section className="band alt">
         <div className="band-head">
           <span className="label" style={{ color: "var(--ink-500)" }}>
             Two sides, one platform

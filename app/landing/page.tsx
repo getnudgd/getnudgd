@@ -1,11 +1,12 @@
 import { Nav } from "@/components/Nav";
 import { Hero } from "@/components/Hero";
+import { MarqueeTicker } from "@/components/MarqueeTicker";
 import { SocialProof } from "@/components/SocialProof";
 import { HowItWorks } from "@/components/HowItWorks";
 import { CompanyLogos } from "@/components/CompanyLogos";
 import { CtaBand } from "@/components/CtaBand";
 import { Footer } from "@/components/Footer";
-import { ScrollReveal } from "@/components/ScrollReveal";
+import { FadeInSection } from "@/components/FadeInSection";
 
 export const metadata = {
   title: "GetNudgd | Get referred by verified employees",
@@ -18,12 +19,23 @@ export default function LandingPage() {
     <>
       <Nav />
       <Hero />
-      <SocialProof />
-      <HowItWorks />
-      <CompanyLogos />
-      <CtaBand />
+      {/* Animation 4 — marquee strip between hero and stats */}
+      <MarqueeTicker />
+      {/* Animation 2 + 3 — scroll fade + spring counter */}
+      <FadeInSection>
+        <SocialProof />
+      </FadeInSection>
+      {/* Animation 2 — each section fades in independently */}
+      <FadeInSection>
+        <HowItWorks />
+      </FadeInSection>
+      <FadeInSection>
+        <CompanyLogos />
+      </FadeInSection>
+      <FadeInSection>
+        <CtaBand />
+      </FadeInSection>
       <Footer />
-      <ScrollReveal />
     </>
   );
 }
