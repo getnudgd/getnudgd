@@ -8,7 +8,7 @@ import { ThankYou } from "./ThankYou";
 
 const TOTAL = 21;
 // Q1–Q7 are all mandatory (change 3: extended from Q6 to Q7)
-const MANDATORY = [1, 2, 3, 4, 5, 6, 7, 13];
+const MANDATORY = [1, 2, 3, 4, 5, 6, 7];
 // Text-input question numbers
 const TEXT_QS = [1, 3, 20];
 
@@ -73,8 +73,8 @@ export function SurveyShell() {
 
   const isMandatory = MANDATORY.includes(current);
   const answered = isCurrentAnswered();
-  // Change 5: mandatory Qs hide Continue until answered; optional Qs always show it
-  const continueVisible = !isMandatory || answered;
+  // Mandatory Qs hide Continue until answered (live ref) OR already saved in state (back-nav)
+  const continueVisible = !isMandatory || answered || isAnswered(current, answers);
 
   function navigate(dir: 1 | -1) {
     syncText(current);
@@ -287,7 +287,7 @@ function QuestionContent({
         // Change 4: emojis removed from labels
         <ChipSelect
           options={[
-            { value: "Employed full time",           label: "Employed — full time" },
+            { value: "Employed full time",           label: "Employed, full time" },
             { value: "Fresher / final year student",  label: "Fresher / final year student" },
             { value: "Freelancer / consultant",       label: "Freelancer / consultant" },
             { value: "Between jobs",                  label: "Currently between jobs" },
@@ -361,7 +361,7 @@ function QuestionContent({
             { value: "1–5 times",                 label: "1–5 times" },
             { value: "5–15, mostly ghosted",      label: "5–15 times, mostly ghosted" },
             { value: "15–30, very few responses", label: "15–30 times, very few responses" },
-            { value: "30+, deeply frustrated",    label: "30+ times — deeply frustrated" },
+            { value: "30+, deeply frustrated",    label: "30+ times, deeply frustrated" },
           ]}
           selected={(answers.q8 as string) || ""}
           onChange={(v) => setAnswer(8, v)}
@@ -393,10 +393,10 @@ function QuestionContent({
       content: (
         <ChipSelect
           options={[
-            { value: "Yes, always",               label: "Yes — I always do this" },
+            { value: "Yes, always",               label: "Yes, I always do this" },
             { value: "Sometimes, takes too long",  label: "Sometimes, but it takes way too long" },
-            { value: "Rarely, don't know how",    label: "Rarely — don't really know how to" },
-            { value: "Never, one resume for all",  label: "Never — one resume for everything" },
+            { value: "Rarely, don't know how",    label: "Rarely, don't really know how to" },
+            { value: "Never, one resume for all",  label: "Never, one resume for everything" },
             { value: "I use AI tools for it",     label: "I use AI tools to do it" },
           ]}
           selected={(answers.q10 as string) || ""}
@@ -409,7 +409,7 @@ function QuestionContent({
       content: (
         <ChipSelect
           options={[
-            { value: "Yes, got the job",             label: "Yes — referral led to a job or interview" },
+            { value: "Yes, got the job",             label: "Yes, referral led to a job or interview" },
             { value: "Got referred, didn't convert",  label: "Got referred but it didn't convert" },
             { value: "Never been referred",           label: "Never been referred" },
             { value: "Tried, felt awkward",           label: "Tried to ask someone but felt too awkward" },
@@ -495,7 +495,7 @@ function QuestionContent({
         // Change 4: emojis removed
         <ChipSelect
           options={[
-            { value: "Yes, great side income",  label: "Yes — great side income" },
+            { value: "Yes, great side income",  label: "Yes, great side income" },
             { value: "Yes, if I can screen",    label: "Yes, only if I can screen candidates first" },
             { value: "Maybe, check policy",     label: "Maybe — need to check company policy" },
             { value: "No, reputation risk",     label: "No — worried about my reputation at work" },
@@ -613,10 +613,6 @@ function QuestionContent({
       <div className="q-number">{num}</div>
       <div className="q-text">
         {q.text}
-        {/* Change 3: opt-tag only for Q8-21, never for mandatory Q1-7 */}
-        {!MANDATORY.includes(qNum) && qNum !== 21 && (
-          <span className="opt-tag">optional</span>
-        )}
       </div>
       {q.sub && <div className="q-sub">{q.sub}</div>}
       {q.content}

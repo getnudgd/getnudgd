@@ -777,7 +777,7 @@ textarea.q-input { resize: vertical; min-height: 96px; }
   user-select: none; line-height: 1.4;
   text-align: left; width: 100%;
 }
-.chip:hover { border-color: var(--indigo-600); color: var(--indigo-600); background: var(--indigo-50); }
+.chip:not(.selected):hover { border-color: var(--indigo-600); color: var(--indigo-600); background: var(--indigo-50); }
 .chip.selected {
   background: var(--indigo-50);
   border-color: var(--indigo-600);
