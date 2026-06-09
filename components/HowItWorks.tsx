@@ -20,6 +20,7 @@ export function HowItWorks() {
                 height={130}
                 style={{ objectFit: "contain" }}
                 aria-hidden="true"
+                unoptimized
               />
             </div>
             <div className="outcome-lbl">WITHOUT A REFERRAL</div>
@@ -40,6 +41,7 @@ export function HowItWorks() {
                 height={130}
                 style={{ objectFit: "contain" }}
                 aria-hidden="true"
+                unoptimized
               />
             </div>
             <div className="outcome-lbl">WITH GETNUDGD</div>
