@@ -37,13 +37,11 @@ export function Hero() {
 
           <AnimatedHeadline
             lines={[
-              { words: ["You", "weren't", "underqualified."] },
-              { words: ["You", "just", "didn't", "know", "anyone", "inside."], em: true },
-              { words: ["Now", "you", "do."], sm: true },
+              { words: ["Ek", "referral"] },
+              { words: ["Wahi", "kaafi", "hai"], em: true },
             ]}
             className="hero-h1"
           />
-          <p className="hero-tagline">Ab fair bhi hai.</p>
 
           <p className="hero-sub">
             Not a job board. A matchmaking platform. We connect you with someone

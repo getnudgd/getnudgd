@@ -91,11 +91,13 @@ export function WaitlistForm({ variant = "hero" }: { variant?: Variant }) {
               {loading ? "Joining…" : isCta ? "Subscribe" : "Notify me"}
             </button>
           </form>
-          <div className="wl-meta">
-            <span>No spam, ever</span>
-            <span className="dot" />
-            <span>Unsubscribe any time</span>
-          </div>
+          {!isCta && (
+            <div className="wl-meta">
+              <span>No spam, ever</span>
+              <span className="dot" />
+              <span>Unsubscribe any time</span>
+            </div>
+          )}
         </>
       ) : (
         <div className="wl-success">

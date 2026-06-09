@@ -610,17 +610,20 @@ section.band.alt {
 /* ============================================================
    FOOTER
    ============================================================ */
-footer.foot { border-top: 0.5px solid var(--border); padding: 28px 24px; background: #fff; }
+footer.foot { border-top: 0.5px solid var(--border); padding: 24px 24px; background: #fff; }
 .foot-inner {
   max-width: 1120px; margin: 0 auto;
   display: flex; justify-content: space-between; align-items: center;
   flex-wrap: wrap; gap: 16px; font-size: 13px;
 }
-.foot-meta { color: var(--fg-muted); }
-.foot-meta b { color: var(--ink-900); font-weight: 600; }
-.foot-links { display: flex; gap: 22px; }
-.foot-links a { color: var(--fg-2); text-decoration: none; }
-.foot-links a:hover { color: var(--ink-900); }
+.foot-social-row { justify-content: center; gap: 32px; }
+.foot-social {
+  display: inline-flex; align-items: center; gap: 8px;
+  color: var(--fg-2); text-decoration: none;
+  font-size: 14px; font-weight: 500;
+  transition: color 0.15s ease;
+}
+.foot-social:hover { color: var(--ink-900); }
 
 /* ============================================================
    SCROLL REVEAL
@@ -884,12 +887,6 @@ textarea.q-input { resize: vertical; min-height: 96px; }
   margin: 22px 0 18px;
 }
 .hero-h1 em { font-style: normal; color: var(--indigo-600); }
-.hero-tagline {
-  font-family: var(--font-display);
-  font-size: 15px; font-weight: 600; letter-spacing: 0.04em;
-  color: var(--ink-400);
-  margin: -10px 0 20px;
-}
 
 /* ============================================================
    OUTCOME EMOJI (HowItWorks user addition)
