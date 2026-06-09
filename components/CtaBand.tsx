@@ -5,10 +5,10 @@ export function CtaBand() {
     <div className="cta-band">
       <div className="cta-inner">
         <span className="label">Coming soon</span>
-        <h2>Want to know the moment we launch?</h2>
+        <h2>Know the moment we launch</h2>
         <p>
-          India&apos;s referral matchmaking platform. Launching soon. Leave your
-          email. One message when we&apos;re ready.
+          Something is coming for everyone who deserved it but didn&apos;t get
+          it. One email when we are ready. No spam, ever.
         </p>
         <WaitlistForm variant="cta" />
       </div>

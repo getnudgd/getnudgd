@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 interface Line {
   words: string[];
   em?: boolean; // wrap line in <em> for indigo colour
+  sm?: boolean; // render line at 55% size (for "Now you do." style closers)
 }
 
 interface AnimatedHeadlineProps {
@@ -55,9 +56,16 @@ export function AnimatedHeadline({ lines, className }: AnimatedHeadlineProps) {
           return acc;
         }, []);
 
+        const lineEl = line.em ? <em>{joined}</em> : joined;
         return (
-          <span key={lineIdx} style={{ display: "block" }}>
-            {line.em ? <em>{joined}</em> : joined}
+          <span
+            key={lineIdx}
+            style={{
+              display: "block",
+              ...(line.sm ? { fontSize: "0.55em", opacity: 0.9, marginTop: "0.2em" } : {}),
+            }}
+          >
+            {lineEl}
           </span>
         );
       })}

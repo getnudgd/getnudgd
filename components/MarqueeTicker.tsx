@@ -2,14 +2,14 @@
 // Placed between Hero and SocialProof sections.
 
 const ITEMS = [
-  "300 applications. 4 replies.",
-  "Right skills. Wrong college.",
-  "Batchmate got in. You're still waiting.",
-  "6.8 CGPA. Filtered before anyone read it.",
-  "Cold-messaged 40 people. 2 replied.",
-  "Final round. Then silence.",
-  "Tier-2 city. Zero alumni network.",
-  "Got referred. Never heard back.",
+  "300 applications. 4 replies",
+  "Right skills, wrong college",
+  "Batchmate got in, you're still waiting",
+  "Filtered before anyone read it",
+  "Cold-messaged 40 people, 2 replied",
+  "Final round, then silence",
+  "Zero alumni network",
+  "Got referred, never heard back",
 ];
 
 export function MarqueeTicker() {

@@ -479,15 +479,15 @@ section.band.alt {
   border: 0.5px solid #fecaca;
 }
 .outcome-col.bright {
-  background: linear-gradient(160deg, var(--indigo-50) 0%, #fff 70%);
-  border: 0.5px solid var(--indigo-100);
+  background: linear-gradient(160deg, #f0fdf4 0%, #fff 70%);
+  border: 0.5px solid #bbf7d0;
 }
 .outcome-lbl {
   font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
   text-transform: uppercase; margin-bottom: 28px;
 }
 .outcome-col.ghost .outcome-lbl { color: #f87171; }
-.outcome-col.bright .outcome-lbl { color: var(--indigo-500); }
+.outcome-col.bright .outcome-lbl { color: #16a34a; }
 .outcome-step {
   font-family: var(--font-display);
   font-size: clamp(18px, 2.2vw, 22px);
@@ -496,7 +496,7 @@ section.band.alt {
   border-bottom: 0.5px solid;
 }
 .outcome-col.ghost .outcome-step { color: var(--ink-300); border-color: var(--ink-100); }
-.outcome-col.bright .outcome-step { color: var(--ink-900); border-color: var(--indigo-100); }
+.outcome-col.bright .outcome-step { color: var(--ink-900); border-color: #bbf7d0; }
 .outcome-step:last-of-type { border-bottom: none; }
 .outcome-pill {
   margin-top: 28px; align-self: flex-start;
@@ -504,7 +504,7 @@ section.band.alt {
   font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
 }
 .outcome-col.ghost .outcome-pill { background: #fee2e2; color: #dc2626; }
-.outcome-col.bright .outcome-pill { background: var(--indigo-100); color: var(--indigo-700); }
+.outcome-col.bright .outcome-pill { background: #dcfce7; color: #15803d; }
 .outcome-emoji { font-size: 40px; margin-bottom: 16px; }
 
 /* ============================================================
@@ -777,7 +777,7 @@ textarea.q-input { resize: vertical; min-height: 96px; }
   user-select: none; line-height: 1.4;
   text-align: left; width: 100%;
 }
-.chip:not(.selected):hover { border-color: var(--indigo-600); color: var(--indigo-600); background: var(--indigo-50); }
+.chip:not(.selected):not([data-just-deselected]):hover { border-color: var(--indigo-600); color: var(--indigo-600); background: var(--indigo-50); }
 .chip.selected {
   background: var(--indigo-50);
   border-color: var(--indigo-600);
@@ -884,6 +884,12 @@ textarea.q-input { resize: vertical; min-height: 96px; }
   margin: 22px 0 18px;
 }
 .hero-h1 em { font-style: normal; color: var(--indigo-600); }
+.hero-tagline {
+  font-family: var(--font-display);
+  font-size: 15px; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--ink-400);
+  margin: -10px 0 20px;
+}
 
 /* ============================================================
    OUTCOME EMOJI (HowItWorks user addition)

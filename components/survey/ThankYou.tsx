@@ -32,11 +32,6 @@ export function ThankYou() {
           Visit Website →
         </Link>
       </div>
-      <div className="ty-foot">
-        <em>Get referred. Not rejected.</em>
-        <br />
-        <span>getnudgd.com</span>
-      </div>
     </div>
   );
 }

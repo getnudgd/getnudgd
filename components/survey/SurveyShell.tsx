@@ -82,7 +82,8 @@ export function SurveyShell() {
     const q21Contact = textRefs.current[211];
     if (q21Contact) setAnswers((prev) => ({ ...prev, q21_contact: q21Contact.value.trim() }));
 
-    if (dir === 1 && isMandatory && !answered) {
+    // Read live ref value at call-time — avoids stale-closure false negatives
+    if (dir === 1 && isMandatory && !isCurrentAnswered()) {
       setErrorQ(current);
       setTimeout(() => setErrorQ(null), 1500);
       return;
@@ -243,7 +244,7 @@ function QuestionContent({
     1: {
       // Change 3+8: Q1 is now mandatory (no opt-tag), logo removed above
       text: "What's your name?",
-      sub: "First name is fine — we just want to know who we're building for.",
+      sub: "First name is fine, we just want to know who we're building for.",
       content: (
         <input
           className="q-input" type="text" placeholder="e.g. Arjun" maxLength={50}
@@ -454,7 +455,7 @@ function QuestionContent({
     },
     14: {
       text: "What's your biggest concern about whether GetNudgd would actually work?",
-      sub: "Most important question for us — be honest.",
+      sub: "Most important question for us. Be honest.",
       content: (
         <ChipSelect
           options={[
@@ -462,7 +463,7 @@ function QuestionContent({
             { value: "Employees not verified",           label: "Are the employees even real or verified?" },
             { value: "HR rejects anyway",                label: "Company HR might reject referred profiles anyway" },
             { value: "Feels ethically wrong",            label: "Paying for referrals feels ethically wrong" },
-            { value: "No concerns",                      label: "No major concerns — sounds legit ✅" },
+            { value: "No concerns",                      label: "No major concerns, sounds legit" },
           ]}
           selected={(answers.q14 as string) || ""}
           onChange={(v) => setAnswer(14, v)}
@@ -476,7 +477,7 @@ function QuestionContent({
       content: (
         <ChipSelect
           options={[
-            { value: "₹0, won't pay",         label: "₹0 — I won't pay" },
+            { value: "₹0, won't pay",         label: "₹0, I won't pay" },
             { value: "₹50–₹200",              label: "₹50–₹200" },
             { value: "₹200–₹500",             label: "₹200–₹500" },
             { value: "₹500–₹1,000",           label: "₹500–₹1,000" },

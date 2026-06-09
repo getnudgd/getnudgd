@@ -37,15 +37,17 @@ export function Hero() {
 
           <AnimatedHeadline
             lines={[
-              { words: ["Ek", "referral"] },
-              { words: ["Wahi", "kaafi", "hai"], em: true },
+              { words: ["You", "weren't", "underqualified."] },
+              { words: ["You", "just", "didn't", "know", "anyone", "inside."], em: true },
+              { words: ["Now", "you", "do."], sm: true },
             ]}
             className="hero-h1"
           />
+          <p className="hero-tagline">Ab fair bhi hai.</p>
 
           <p className="hero-sub">
             Not a job board. A matchmaking platform. We connect you with someone
-            on the inside, who puts your name forward.
+            on the inside who puts your name forward.
           </p>
 
           {/* Waitlist card */}
@@ -55,7 +57,7 @@ export function Hero() {
                 Be first to know when we launch.
               </div>
               <div className="wl-card-sub">
-                We&apos;ll email you once, the day early access opens. That&apos;s it.
+                One email. The day early access opens. Nothing else.
               </div>
             </div>
             <span className="label">I&apos;m here as</span>
