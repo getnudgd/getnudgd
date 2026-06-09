@@ -977,10 +977,7 @@ textarea.q-input { resize: vertical; min-height: 96px; }
   to   { transform: translateX(-50%); }
 }
 
-/* Hide label on mobile */
-@media (max-width: 640px) {
-  .marquee-label { display: none; }
-}
+/* .marquee-label hidden via the 768px responsive block below */
 
 /* ============================================================
    ANIMATION 5 — CARD HOVER LIFT on .side cards (pure CSS)
@@ -1063,22 +1060,110 @@ textarea.q-input { resize: vertical; min-height: 96px; }
 /* ============================================================
    RESPONSIVE
    ============================================================ */
+
+/* ── Tablet: hero switches to single column ── */
 @media (max-width: 960px) {
   .hero-grid { grid-template-columns: 1fr; gap: 40px; }
   .hero-device { max-width: 520px; margin: 0 auto; }
 }
-@media (max-width: 720px) {
-  .wl-nav-mid { display: none; }
+
+/* ── Mobile: 768px and below ── */
+@media (max-width: 768px) {
+  /* Prevent horizontal overflow */
+  html, body { overflow-x: hidden; }
+
+  /* Nav */
+  .wl-nav-inner { padding: 0 16px; height: 56px; }
+  .wl-nav-mid   { display: none; }
+
+  /* Hero */
+  .hero { padding: 32px 16px 24px; }
+  .hero-grid { grid-template-columns: 1fr; gap: 28px; }
+  .hero h1,
+  .hero-h1 {
+    font-size: clamp(30px, 9vw, 40px);
+    letter-spacing: -1px;
+    margin: 16px 0 14px;
+  }
+  .hero-pill {
+    font-size: 11px;
+    padding: 4px 10px 4px 6px;
+    gap: 6px;
+  }
+  .hero-pill .hp-avs span { width: 15px; height: 15px; }
+  .hero-sub { font-size: 15px; margin-bottom: 20px; max-width: 100%; }
+  .wl-card { max-width: 100%; }
+  .hero-device { max-width: 100%; border-radius: 14px; }
+  .hero-device .hd-body { padding: 10px; gap: 6px; }
+  .hd-row { padding: 10px; }
+
+  /* Ticker: hide REAL STORIES label */
+  .marquee-label { display: none; }
+
+  /* Stats */
+  .stats { padding: 32px 16px 0; }
   .stats-inner { grid-template-columns: 1fr; }
-  .stat { border-right: none; border-bottom: 0.5px solid var(--border); }
+  .stat {
+    padding: 20px 16px;
+    border-right: none;
+    border-bottom: 0.5px solid var(--border);
+  }
   .stat:last-child { border-bottom: none; }
-  .outcome-grid { grid-template-columns: 1fr; }
+  .stat-num { font-size: 36px; letter-spacing: -1px; }
+  .stat-num .x { font-size: 22px; }
+  .stat-cap { max-width: 100%; }
+
+  /* Section bands */
+  section.band { padding: 48px 16px; }
+  .band-head { margin: 0 auto 24px; }
+  .band-head h2 { font-size: clamp(22px, 6.5vw, 30px); }
+  .band-head p { font-size: 15px; }
+
+  /* Comparison cards */
+  .outcome-grid { grid-template-columns: 1fr; gap: 16px; }
+  .outcome-col { padding: 24px 20px 20px; }
+  .outcome-emoji { height: 100px; }
+  .outcome-emoji img { max-width: 120px !important; height: auto !important; }
+  .outcome-step { font-size: 17px; padding: 12px 0; }
+
+  /* Two Sides */
   .sides { grid-template-columns: 1fr; }
+  .side { padding: 24px 20px; }
+  .side-h { font-size: clamp(20px, 5.5vw, 24px); }
+  .side-cta {
+    width: 100%;
+    min-height: 48px;
+    align-self: stretch;
+    justify-content: center;
+  }
+
+  /* Company logos */
+  .logos { padding: 36px 16px; }
+  .logos-row { gap: 8px; }
+  .logo-chip { font-size: 12px; padding: 7px 12px; }
+
+  /* CTA band */
+  .cta-band { padding: 56px 16px; }
+  .cta-inner h2 { font-size: clamp(24px, 7vw, 32px); }
+  .cta-inner p { font-size: 15px; }
+  .cta-form { max-width: 100%; width: 100%; }
+
+  /* Email row + submit: full width stacked on mobile */
   .email-row { grid-template-columns: 1fr; }
-  .hero { padding: 40px 24px 24px; }
-  .hero h1, .hero-h1 { letter-spacing: -1px; }
-  section.band { padding: 64px 24px; }
+  .submit-btn { min-height: 48px; width: 100%; }
+
+  /* Footer */
+  footer.foot { padding: 20px 16px; }
+  .foot-inner {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 12px;
+  }
 }
+
+/* ── Survey: small screens ── */
 @media (max-width: 600px) {
   .survey-wrap { padding: 28px 16px 60px; }
   .intro-h1 { font-size: 26px; }
