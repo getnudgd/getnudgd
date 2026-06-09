@@ -468,6 +468,7 @@ section.band.alt {
 .outcome-grid {
   max-width: 820px; margin: 0 auto;
   display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+  align-items: stretch;
 }
 .outcome-col {
   border-radius: 20px; padding: 40px 36px;
@@ -484,7 +485,7 @@ section.band.alt {
 }
 .outcome-lbl {
   font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
-  text-transform: uppercase; margin-bottom: 28px;
+  text-transform: uppercase; margin-bottom: 24px; margin-top: 4px;
 }
 .outcome-col.ghost .outcome-lbl { color: #f87171; }
 .outcome-col.bright .outcome-lbl { color: #16a34a; }
@@ -495,17 +496,20 @@ section.band.alt {
   padding: 14px 0;
   border-bottom: 0.5px solid;
 }
-.outcome-col.ghost .outcome-step { color: var(--ink-300); border-color: var(--ink-100); }
+.outcome-col.ghost .outcome-step  { color: var(--ink-900); border-color: #fecaca; }
 .outcome-col.bright .outcome-step { color: var(--ink-900); border-color: #bbf7d0; }
 .outcome-step:last-of-type { border-bottom: none; }
 .outcome-pill {
-  margin-top: 28px; align-self: flex-start;
+  margin-top: auto; padding-top: 28px; align-self: flex-start;
   padding: 7px 18px; border-radius: 999px;
   font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
 }
 .outcome-col.ghost .outcome-pill { background: #fee2e2; color: #dc2626; }
 .outcome-col.bright .outcome-pill { background: #dcfce7; color: #15803d; }
-.outcome-emoji { font-size: 40px; margin-bottom: 20px; }
+.outcome-emoji {
+  height: 140px; display: flex; align-items: center; justify-content: center;
+  margin-bottom: 20px;
+}
 
 /* ============================================================
    COMPANY LOGOS
@@ -891,11 +895,7 @@ textarea.q-input { resize: vertical; min-height: 96px; }
 /* ============================================================
    OUTCOME EMOJI (HowItWorks user addition)
    ============================================================ */
-.outcome-emoji {
-  margin-bottom: 20px;
-  line-height: 1;
-  display: block;
-}
+/* .outcome-emoji consolidated above */
 
 /* ============================================================
    ANIMATION 4 — MARQUEE TICKER (pure CSS)

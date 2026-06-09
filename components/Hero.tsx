@@ -6,7 +6,7 @@ export function Hero() {
     <section className="hero">
       <div className="hero-grid">
         {/* Left column */}
-        <div>
+        <div style={{ maxWidth: 560 }}>
           <span className="hero-pill">
             <span className="hp-avs" aria-hidden="true">
               <span
@@ -52,7 +52,7 @@ export function Hero() {
           <div className="wl-card" id="waitlist">
             <div className="wl-card-head">
               <div className="wl-card-title">
-                Be first to know when we launch.
+                Be first to know when we launch
               </div>
               <div className="wl-card-sub">
                 One email. The day early access opens. Nothing else.
