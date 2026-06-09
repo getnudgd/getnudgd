@@ -149,7 +149,7 @@ export function SurveyShell() {
         {/* Change 6: removed Anonymous + Early access badges entirely */}
         <div className="intro-meta">
           <div className="intro-meta-item">⏱ ~3 minutes</div>
-          <div className="intro-meta-item">📋 21 questions</div>
+
         </div>
         <button className="btn-start" onClick={() => setStarted(true)}>
           Let&apos;s Go →
