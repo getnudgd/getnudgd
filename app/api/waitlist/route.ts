@@ -8,9 +8,9 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { email, role, whatsapp } = body as {
+    const { email, userType, whatsapp } = body as {
       email: string;
-      role?: string;
+      userType?: string;
       whatsapp?: string;
     };
 
@@ -18,8 +18,11 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: "Invalid email" }, { status: 400 });
     }
 
+    const resolvedType = userType === "referrer" ? "referrer" : "job_seeker";
+
     const result = await addToBrevo(email.trim().toLowerCase(), {
-      ...(role ? { ROLE: role } : {}),
+      USER_TYPE: resolvedType,
+      SOURCE: "landing_page",
       ...(whatsapp ? { WHATSAPP: whatsapp } : {}),
     });
 

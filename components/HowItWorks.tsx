@@ -6,7 +6,7 @@ export function HowItWorks() {
       {/* Before / After Contrast */}
       <section className="band alt">
         <div className="band-head">
-          <h2>Jobs go to the connected. Not just the qualified.</h2>
+          <h2>Jobs go to the connected. Not just the qualified</h2>
         </div>
         <div className="outcome-grid">
 
@@ -65,7 +65,7 @@ export function HowItWorks() {
           <span className="label" style={{ color: "var(--ink-500)" }}>
             Two sides, one platform
           </span>
-          <h2>Pick your side. Both win.</h2>
+          <h2>Pick your side. Both win</h2>
         </div>
         <div className="sides">
           <div className="side seeker">

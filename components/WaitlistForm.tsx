@@ -35,7 +35,10 @@ export function WaitlistForm({ variant = "hero" }: { variant?: Variant }) {
           "Content-Type": "application/json",
           "x-api-secret": process.env.NEXT_PUBLIC_API_SECRET ?? "",
         },
-        body: JSON.stringify({ email: val, role }),
+        body: JSON.stringify({
+          email: val,
+          userType: role === "seeker" ? "job_seeker" : "referrer",
+        }),
       });
     } catch {
       // fail silently — still show success to user

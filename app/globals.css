@@ -103,7 +103,7 @@ html, body {
   color: var(--fg-2);
   font-size: var(--fs-body);
   line-height: var(--lh-body);
-  background: var(--bg-1);
+  background: #F9FAFB;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -476,18 +476,18 @@ section.band.alt {
   display: flex; flex-direction: column;
 }
 .outcome-col.ghost {
-  background: linear-gradient(160deg, #fff5f5 0%, #fff 70%);
+  background: #FFF0F0;
   border: 0.5px solid #fecaca;
 }
 .outcome-col.bright {
-  background: linear-gradient(160deg, #f0fdf4 0%, #fff 70%);
+  background: #F0FFF4;
   border: 0.5px solid #bbf7d0;
 }
 .outcome-lbl {
   font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
   text-transform: uppercase; margin-bottom: 24px; margin-top: 4px;
 }
-.outcome-col.ghost .outcome-lbl { color: #f87171; }
+.outcome-col.ghost .outcome-lbl { color: #DC2626; }
 .outcome-col.bright .outcome-lbl { color: #16a34a; }
 .outcome-step {
   font-family: var(--font-display);
@@ -507,8 +507,8 @@ section.band.alt {
   padding: 8px 16px; border-radius: 999px;
   font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;
 }
-.outcome-col.ghost .outcome-pill { background: #fee2e2; color: #dc2626; }
-.outcome-col.bright .outcome-pill { background: #dcfce7; color: #15803d; }
+.outcome-col.ghost .outcome-pill { background: #FEE2E2; color: #DC2626; border: 1px solid #FECACA; }
+.outcome-col.bright .outcome-pill { background: #DCFCE7; color: #16A34A; border: 1px solid #BBF7D0; }
 .outcome-emoji {
   height: 140px; display: flex; align-items: center; justify-content: center;
   margin-bottom: 20px;
