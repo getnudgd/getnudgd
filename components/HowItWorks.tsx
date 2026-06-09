@@ -24,10 +24,12 @@ export function HowItWorks() {
               />
             </div>
             <div className="outcome-lbl">WITHOUT A REFERRAL</div>
-            <div className="outcome-step">You apply</div>
-            <div className="outcome-step">You wait</div>
-            <div className="outcome-step">You hear nothing</div>
-            <div className="outcome-step">You try again</div>
+            <div className="outcome-steps">
+              <div className="outcome-step">You apply</div>
+              <div className="outcome-step">You wait</div>
+              <div className="outcome-step">You hear nothing</div>
+              <div className="outcome-step">You try again</div>
+            </div>
             <div className="outcome-pill">GHOSTED</div>
           </div>
 
@@ -45,10 +47,12 @@ export function HowItWorks() {
               />
             </div>
             <div className="outcome-lbl">WITH GETNUDGD</div>
-            <div className="outcome-step">You get connected</div>
-            <div className="outcome-step">Your name goes forward</div>
-            <div className="outcome-step">You hear back</div>
-            <div className="outcome-step">You get the interview</div>
+            <div className="outcome-steps">
+              <div className="outcome-step">You get connected</div>
+              <div className="outcome-step">Your name goes forward</div>
+              <div className="outcome-step">You hear back</div>
+              <div className="outcome-step">You get the interview</div>
+            </div>
             <div className="outcome-pill">REFERRED</div>
           </div>
 
