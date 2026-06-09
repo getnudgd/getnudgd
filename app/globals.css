@@ -505,7 +505,7 @@ section.band.alt {
 }
 .outcome-col.ghost .outcome-pill { background: #fee2e2; color: #dc2626; }
 .outcome-col.bright .outcome-pill { background: #dcfce7; color: #15803d; }
-.outcome-emoji { font-size: 40px; margin-bottom: 16px; }
+.outcome-emoji { font-size: 40px; margin-bottom: 20px; }
 
 /* ============================================================
    COMPANY LOGOS
@@ -892,9 +892,9 @@ textarea.q-input { resize: vertical; min-height: 96px; }
    OUTCOME EMOJI (HowItWorks user addition)
    ============================================================ */
 .outcome-emoji {
-  font-size: 32px;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
   line-height: 1;
+  display: block;
 }
 
 /* ============================================================
