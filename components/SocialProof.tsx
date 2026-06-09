@@ -59,9 +59,9 @@ export function SocialProof() {
           <div className="stat-src">Source · HR insights, 2024</div>
         </div>
         <div className="stat">
-          <StatCounter to={3} suffix=" days" colorClass="amber" startDelay={300} />
+          <StatCounter to={100} suffix="%" colorClass="amber" startDelay={300} />
           <div className="stat-cap">
-            Full refund if your referrer does not act. No questions asked.
+            refund if your referrer does not act
           </div>
           <div className="stat-src">GetNudgd guarantee</div>
         </div>
