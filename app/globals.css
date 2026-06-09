@@ -898,15 +898,55 @@ textarea.q-input { resize: vertical; min-height: 96px; }
 /* .outcome-emoji consolidated above */
 
 /* ============================================================
-   ANIMATION 4 — MARQUEE TICKER (pure CSS)
+   ANIMATION 4 — MARQUEE TICKER (premium dark strip)
    ============================================================ */
 .marquee-strip {
-  overflow: hidden;
-  background: var(--ink-100);
-  padding: 14px 0;
-  border-top: 0.5px solid var(--border);
-  border-bottom: 0.5px solid var(--border);
+  background: #0F0F1A;
+  padding: 16px 0;
+  display: flex;
+  align-items: center;
 }
+
+/* Static "REAL STORIES" label on the left */
+.marquee-label {
+  flex-shrink: 0;
+  padding: 0 20px 0 24px;
+  color: #6366F1;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border-right: 1px solid rgba(99, 102, 241, 0.25);
+  line-height: 1;
+}
+
+/* Scrolling region — fades on both edges */
+.marquee-scroll {
+  position: relative;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+.marquee-scroll::before,
+.marquee-scroll::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 120px;
+  z-index: 2;
+  pointer-events: none;
+}
+.marquee-scroll::before {
+  left: 0;
+  background: linear-gradient(to right, #0F0F1A 0%, transparent 100%);
+}
+.marquee-scroll::after {
+  right: 0;
+  background: linear-gradient(to left, #0F0F1A 0%, transparent 100%);
+}
+
 .marquee-track {
   display: flex;
   width: max-content;
@@ -917,18 +957,26 @@ textarea.q-input { resize: vertical; min-height: 96px; }
   display: inline-flex;
   align-items: center;
   white-space: nowrap;
-  font-size: 14px;
-  color: var(--ink-500);
-  padding: 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: #ffffff;
+  padding: 0 4px;
 }
 .marquee-sep {
-  margin: 0 12px;
-  color: var(--indigo-600);
-  font-weight: 700;
+  margin: 0 24px;
+  color: #6366F1;
+  font-size: 8px;
 }
 @keyframes marquee {
   from { transform: translateX(0); }
   to   { transform: translateX(-50%); }
+}
+
+/* Hide label on mobile */
+@media (max-width: 640px) {
+  .marquee-label { display: none; }
 }
 
 /* ============================================================

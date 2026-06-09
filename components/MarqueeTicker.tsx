@@ -1,5 +1,5 @@
-// Animation 4 — Marquee pain-point ticker (pure CSS, no library)
-// Placed between Hero and SocialProof sections.
+// Animation 4 — Premium dark marquee ticker
+// Structure: static "REAL STORIES" label | scrolling pain-point text
 
 const ITEMS = [
   "300 applications. 4 replies",
@@ -13,18 +13,26 @@ const ITEMS = [
 ];
 
 export function MarqueeTicker() {
-  // Duplicate for seamless loop
+  // Two full copies → translateX(-50%) creates a seamless loop
   const all = [...ITEMS, ...ITEMS];
 
   return (
-    <div className="marquee-strip" aria-hidden="true">
-      <div className="marquee-track">
-        {all.map((item, i) => (
-          <span key={i} className="marquee-item">
-            {item}
-            <span className="marquee-sep">·</span>
-          </span>
-        ))}
+    <div className="marquee-strip">
+      {/* Static label — hidden on mobile */}
+      <div className="marquee-label" aria-hidden="true">
+        Real Stories
+      </div>
+
+      {/* Scrolling track */}
+      <div className="marquee-scroll" aria-hidden="true">
+        <div className="marquee-track">
+          {all.map((item, i) => (
+            <span key={i} className="marquee-item">
+              {item}
+              <span className="marquee-sep" aria-hidden="true">◆</span>
+            </span>
+          ))}
+        </div>
       </div>
     </div>
   );
