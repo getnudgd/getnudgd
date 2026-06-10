@@ -45,7 +45,7 @@ export function Hero() {
 
           <p className="hero-sub">
             Not a job board. A matchmaking platform. We connect you with someone
-            on the inside who puts your name forward.
+            on the inside who puts your name forward
           </p>
 
           {/* Waitlist card */}
@@ -55,7 +55,7 @@ export function Hero() {
                 Be first to know when we launch
               </div>
               <div className="wl-card-sub">
-                One email. The day early access opens. Nothing else.
+                One email, we won&apos;t stalk your inbox after that.
               </div>
             </div>
             <span className="label">I&apos;m here as</span>

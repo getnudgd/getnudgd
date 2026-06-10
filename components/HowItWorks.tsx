@@ -6,7 +6,7 @@ export function HowItWorks() {
       {/* Before / After Contrast */}
       <section className="band alt">
         <div className="band-head">
-          <h2>Jobs go to the connected. Not just the qualified</h2>
+          <h2>The best opportunities come through connections</h2>
         </div>
         <div className="outcome-grid">
 
@@ -37,7 +37,7 @@ export function HowItWorks() {
           <div className="outcome-col bright">
             <div className="outcome-emoji">
               <Image
-                src="/undraw_code-thinking_0vf2.svg"
+                src="/undraw_online-ad_703t_green.svg"
                 alt=""
                 width={180}
                 height={130}
@@ -53,7 +53,7 @@ export function HowItWorks() {
               <div className="outcome-step">You hear back</div>
               <div className="outcome-step">You get the interview</div>
             </div>
-            <div className="outcome-pill">REFERRED</div>
+            <div className="outcome-pill">INTERVIEW CALLS</div>
           </div>
 
         </div>
