@@ -65,7 +65,7 @@ export function HowItWorks() {
           <span className="label" style={{ color: "var(--ink-500)" }}>
             Two sides, one platform
           </span>
-          <h2>Pick your side. Both win</h2>
+          <h2>Job seeker or referrer, you both win</h2>
         </div>
         <div className="sides">
           <div className="side seeker">

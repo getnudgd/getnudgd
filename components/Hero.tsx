@@ -44,8 +44,7 @@ export function Hero() {
           />
 
           <p className="hero-sub">
-            Not a job board. A matchmaking platform. We connect you with someone
-            on the inside who puts your name forward
+            Forget job boards, we match you with insiders who vouch for you
           </p>
 
           {/* Waitlist card */}

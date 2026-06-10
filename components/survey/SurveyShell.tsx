@@ -491,16 +491,16 @@ function QuestionContent({
 
     // ── Section E: Referrer Side ──
     16: {
-      text: "If you're employed — would you sign up as a referrer on GetNudgd and earn ₹1,500–₹10,000 per person you successfully get hired?",
+      text: "If you're employed, would you sign up as a referrer on GetNudgd and earn ₹1,500–₹10,000 per person you successfully get hired?",
       content: (
         // Change 4: emojis removed
         <ChipSelect
           options={[
             { value: "Yes, great side income",  label: "Yes, great side income" },
             { value: "Yes, if I can screen",    label: "Yes, only if I can screen candidates first" },
-            { value: "Maybe, check policy",     label: "Maybe — need to check company policy" },
-            { value: "No, reputation risk",     label: "No — worried about my reputation at work" },
-            { value: "Fresher, not applicable", label: "I'm a fresher — not applicable" },
+            { value: "Maybe, check policy",     label: "Maybe, need to check company policy" },
+            { value: "No, reputation risk",     label: "No, worried about my reputation at work" },
+            { value: "Fresher, not applicable", label: "I'm a fresher, not applicable" },
           ]}
           selected={(answers.q16 as string) || ""}
           onChange={(v) => setAnswer(16, v)}
@@ -516,7 +516,7 @@ function QuestionContent({
             { value: "Company policy against it",         label: "My company may have a policy against this" },
             { value: "Person might misrepresent",         label: "What if the person misrepresents themselves?" },
             { value: "Only personally vetted",            label: "I'd only refer people I've personally vetted" },
-            { value: "No concern",                        label: "No real concern — I'd refer anyone who looks good" },
+            { value: "No concern",                        label: "No real concern, I'd refer anyone who looks good" },
           ]}
           selected={(answers.q17 as string) || ""}
           onChange={(v) => setAnswer(17, v)}
@@ -531,7 +531,7 @@ function QuestionContent({
             { value: "No limit",      label: "No limit that I know of" },
             { value: "1–2 per month", label: "1–2 per month" },
             { value: "3–5 per month", label: "3–5 per month" },
-            { value: "Not sure",      label: "Not sure — haven't checked" },
+            { value: "Not sure",      label: "Not sure, haven't checked" },
             { value: "Doesn't allow", label: "My company doesn't allow external referrals at all" },
           ]}
           selected={(answers.q18 as string) || ""}
