@@ -17,7 +17,7 @@ const SECTIONS: Record<number, { letter: string; name: string; desc: string }> =
   8:  { letter: "B", name: "Job Search Reality",      desc: "Questions 8–11, Your pain points" },
   12: { letter: "C", name: "GetNudgd Concept Fit",    desc: "Questions 12–14, Does this solve your problem?" },
   15: { letter: "D", name: "Pricing",                 desc: "Question 15, What you'd pay" },
-  16: { letter: "E", name: "Referrer Side",           desc: "Questions 16–19, If you were the referrer" },
+  16: { letter: "E", name: "Insider Side",             desc: "Questions 16–19, If you were the Insider" },
   20: { letter: "F", name: "Open Feedback & Contact", desc: "Questions 20–21, Your voice + early access" },
 };
 
@@ -59,6 +59,7 @@ export function SurveyShell() {
   const [started, setStarted] = useState(false);
   const [current, setCurrent] = useState(1);
   const [answers, setAnswers] = useState<Answers>({});
+  const [website, setWebsite] = useState(""); // honeypot: real users never see or fill this
   const [errorQ, setErrorQ] = useState<number | null>(null);
   const [submitted, setSubmitted] = useState(false);
   // Bump this when any text input changes to trigger re-render for continue visibility
@@ -145,11 +146,12 @@ export function SurveyShell() {
     try {
       const res = await fetch("/api/survey", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-secret": process.env.NEXT_PUBLIC_API_SECRET ?? "",
-        },
-        body: JSON.stringify({ answers: finalAnswers, submittedAt: new Date().toISOString() }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          answers: finalAnswers,
+          website,
+          submittedAt: new Date().toISOString(),
+        }),
       });
       if (!res.ok) console.error("[survey] API error:", res.status, await res.text());
     } catch (err) {
@@ -192,6 +194,17 @@ export function SurveyShell() {
 
   return (
     <div id="survey-screen">
+      {/* Honeypot: hidden from real users, real users never see or fill this */}
+      <input
+        type="text"
+        name="website"
+        value={website}
+        onChange={(e) => setWebsite(e.target.value)}
+        tabIndex={-1}
+        autoComplete="off"
+        aria-hidden="true"
+        style={{ position: "absolute", left: "-9999px", width: "1px", height: "1px" }}
+      />
       {/* Progress */}
       <div className="progress-wrap">
         <div className="progress-label">
@@ -519,9 +532,9 @@ function QuestionContent({
       ),
     },
 
-    // ── Section E: Referrer Side ──
+    // ── Section E: Insider Side ──
     16: {
-      text: "If you're employed, would you sign up as a referrer on GetNudgd and earn ₹1,500–₹10,000 per person you successfully get hired?",
+      text: "If you're employed, would you sign up as an Insider on GetNudgd and earn ₹1,500–₹10,000 per person you successfully get hired?",
       content: (
         // Change 4: emojis removed
         <ChipSelect

@@ -61,7 +61,7 @@ export function SocialProof() {
         <div className="stat">
           <StatCounter to={100} suffix="%" colorClass="amber" startDelay={300} />
           <div className="stat-cap">
-            refund if your referrer does not act
+            refund if your Insider does not act
           </div>
           <div className="stat-src">GetNudgd guarantee</div>
         </div>

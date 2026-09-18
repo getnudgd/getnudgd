@@ -14,8 +14,9 @@ const WA_LINK = `https://wa.me/?text=${WA_MESSAGE}`;
 type Variant = "hero" | "cta";
 
 export function WaitlistForm({ variant = "hero" }: { variant?: Variant }) {
-  const [role, setRole] = useState<"seeker" | "referrer">("seeker");
+  const [role, setRole] = useState<"seeker" | "insider">("seeker");
   const [email, setEmail] = useState("");
+  const [website, setWebsite] = useState(""); // honeypot: real users never see or fill this
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [shaking, setShaking] = useState(false);
@@ -32,13 +33,11 @@ export function WaitlistForm({ variant = "hero" }: { variant?: Variant }) {
     try {
       await fetch("/api/waitlist", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-secret": process.env.NEXT_PUBLIC_API_SECRET ?? "",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: val,
-          userType: role === "seeker" ? "job_seeker" : "referrer",
+          userType: role,
+          website,
         }),
       });
     } catch {
@@ -69,10 +68,10 @@ export function WaitlistForm({ variant = "hero" }: { variant?: Variant }) {
             </button>
             <button
               type="button"
-              className={`role-btn ${role === "referrer" ? "active" : ""}`}
-              onClick={() => setRole("referrer")}
+              className={`role-btn ${role === "insider" ? "active" : ""}`}
+              onClick={() => setRole("insider")}
             >
-              I refer people
+              I&apos;m an Insider
             </button>
           </div>
           {/* Animation 8: shake class added on invalid submit */}
@@ -82,6 +81,16 @@ export function WaitlistForm({ variant = "hero" }: { variant?: Variant }) {
             onAnimationEnd={handleShakeEnd}
             noValidate
           >
+            <input
+              type="text"
+              name="website"
+              value={website}
+              onChange={(e) => setWebsite(e.target.value)}
+              tabIndex={-1}
+              autoComplete="off"
+              aria-hidden="true"
+              style={{ position: "absolute", left: "-9999px", width: "1px", height: "1px" }}
+            />
             <input
               className="email-input"
               type="email"

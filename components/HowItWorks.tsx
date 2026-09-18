@@ -65,7 +65,7 @@ export function HowItWorks() {
           <span className="label" style={{ color: "var(--ink-500)" }}>
             Two sides, one platform
           </span>
-          <h2>Job seeker or referrer, you both win</h2>
+          <h2>Seeker or Insider, you both win</h2>
         </div>
         <div className="sides">
           <div className="side seeker">
@@ -79,8 +79,8 @@ export function HowItWorks() {
               Notify me when ready
             </a>
           </div>
-          <div className="side referrer">
-            <span className="side-for">For referrers</span>
+          <div className="side insider">
+            <span className="side-for">For Insiders</span>
             <h3 className="side-h">Your reputation is worth real money</h3>
             <p className="side-d">
               You already know who is good. Vouch for the right people.
