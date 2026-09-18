@@ -10,15 +10,7 @@ export default defineConfig({
     },
   },
   test: {
-    environment: "node",
+    environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
-    ...(
-      {
-        environmentMatchGlobs: [
-          ["components/**", "jsdom"],
-          ["app/**/*.test.tsx", "jsdom"],
-        ],
-      } as Record<string, unknown>
-    ),
   },
 });
