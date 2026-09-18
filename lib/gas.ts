@@ -20,7 +20,6 @@ export async function submitToSheets(data: object): Promise<GasResult> {
       redirect: "follow",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
-        secret: process.env.NEXT_PUBLIC_API_SECRET,
         ...( data as object ),
       }),
     });

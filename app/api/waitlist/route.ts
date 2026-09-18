@@ -1,24 +1,39 @@
 import { NextRequest } from "next/server";
 import { addToBrevo } from "@/lib/brevo";
-import { guardRequest } from "@/lib/api-security";
+import { isSameOrigin } from "@/src/lib/same-origin";
+import { createInMemoryRateLimiter } from "@/src/lib/ratelimit";
+
+const rateLimiter = createInMemoryRateLimiter(5, 60_000);
 
 export async function POST(req: NextRequest) {
-  const blocked = guardRequest(req);
-  if (blocked) return blocked;
+  if (!isSameOrigin(req)) {
+    return Response.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+  if (!rateLimiter.check(ip)) {
+    return Response.json({ error: "Too many requests" }, { status: 429 });
+  }
 
   try {
     const body = await req.json();
-    const { email, userType, whatsapp } = body as {
+    const { email, userType, whatsapp, website } = body as {
       email: string;
       userType?: string;
       whatsapp?: string;
+      website?: string;
     };
+
+    if (website) {
+      // Honeypot: bots fill hidden fields real users never see. Accept silently, do nothing.
+      return Response.json({ success: true });
+    }
 
     if (!email || typeof email !== "string" || !email.includes("@")) {
       return Response.json({ error: "Invalid email" }, { status: 400 });
     }
 
-    const resolvedType = userType === "referrer" ? "referrer" : "job_seeker";
+    const resolvedType = userType === "insider" ? "insider" : "seeker";
 
     const result = await addToBrevo(email.trim().toLowerCase(), {
       USER_TYPE: resolvedType,
@@ -27,13 +42,8 @@ export async function POST(req: NextRequest) {
     });
 
     if (!result.ok) {
-      console.error("[waitlist] Brevo failed:", result.reason, "| status:", result.status, "| body:", result.body);
-      // Still return 200 to the user — their submission is noted even if Brevo is down
-      return Response.json({
-        success: true,
-        warning: "Subscribed locally; email provider error logged",
-        _debug: { reason: result.reason, status: result.status },
-      });
+      console.error("[waitlist] Brevo failed:", result.reason, "| status:", result.status);
+      return Response.json({ success: true, warning: "Subscribed locally; email provider error logged" });
     }
 
     return Response.json({ success: true });
