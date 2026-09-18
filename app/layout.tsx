@@ -41,7 +41,7 @@ export default function RootLayout({
       lang="en"
       className={`${jakarta.variable} ${inter.variable}`}
     >
-      <body className="seeker-scope">
+      <body>
         {children}
         <Analytics />
       </body>

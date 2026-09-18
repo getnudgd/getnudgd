@@ -4,20 +4,14 @@ import { SurveyShell } from "@/components/survey/SurveyShell";
 
 export const metadata = {
   title: "GetNudgd · Pre-Launch Survey",
-  description:
-    "Help us build a better referral platform. Answer 21 quick questions and get early access.",
+  description: "Help us build GetNudgd. Answer 21 quick questions and get early access.",
 };
 
 export default function SurveyPage() {
   return (
-    <div
-      style={{
-        background: "var(--bg-surface)",
-        minHeight: "100vh",
-      }}
-    >
+    <div style={{ background: "var(--bg-surface)", minHeight: "100vh" }}>
       <div className="survey-wrap">
-        <Link href="/landing" style={{ textDecoration: "none" }}>
+        <Link href="/" style={{ textDecoration: "none" }}>
           <div className="survey-logo">
             <Image src="/logo-light.png" alt="getnudgd" height={28} width={140} style={{ objectFit: "contain" }} priority />
           </div>
