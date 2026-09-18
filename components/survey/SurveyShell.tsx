@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { ChipSelect } from "./ChipSelect";
 import { StarRating } from "./StarRating";
 import { EmojiScale } from "./EmojiScale";
@@ -30,6 +30,31 @@ function isAnswered(qNum: number, answers: Answers): boolean {
   return true;
 }
 
+function setTextRef(textRefs: React.MutableRefObject<Record<number, HTMLInputElement | HTMLTextAreaElement | null>>, qNum: number, el: HTMLInputElement | HTMLTextAreaElement | null) {
+  textRefs.current[qNum] = el;
+}
+
+function getIsCurrentAnswered(
+  textRefs: React.MutableRefObject<Record<number, HTMLInputElement | HTMLTextAreaElement | null>>,
+  current: number,
+  answers: Answers
+): boolean {
+  // Text questions: check the live ref value
+  if (TEXT_QS.includes(current)) {
+    const el = textRefs.current[current];
+    return (el?.value.trim().length ?? 0) > 0;
+  }
+  // Q21 has both a text input (ref 211) and chips
+  if (current === 21) {
+    const contactEl = textRefs.current[211];
+    return (
+      (contactEl?.value.trim().length ?? 0) > 0 ||
+      isAnswered(21, answers)
+    );
+  }
+  return isAnswered(current, answers);
+}
+
 export function SurveyShell() {
   const [started, setStarted] = useState(false);
   const [current, setCurrent] = useState(1);
@@ -38,11 +63,17 @@ export function SurveyShell() {
   const [submitted, setSubmitted] = useState(false);
   // Bump this when any text input changes to trigger re-render for continue visibility
   const [inputTick, setInputTick] = useState(0);
+  const [currentAnswered, setCurrentAnswered] = useState(false);
   const textRefs = useRef<Record<number, HTMLInputElement | HTMLTextAreaElement | null>>({});
 
   function onTextChange() {
     setInputTick((t) => t + 1);
   }
+
+  // Update currentAnswered whenever inputTick or current/answers changes
+  useEffect(() => {
+    setCurrentAnswered(getIsCurrentAnswered(textRefs, current, answers));
+  }, [current, answers, inputTick]);
 
   function syncText(qNum: number) {
     const el = textRefs.current[qNum];
@@ -72,9 +103,8 @@ export function SurveyShell() {
   }
 
   const isMandatory = MANDATORY.includes(current);
-  const answered = isCurrentAnswered();
   // Mandatory Qs hide Continue until answered (live ref) OR already saved in state (back-nav)
-  const continueVisible = !isMandatory || answered || isAnswered(current, answers);
+  const continueVisible = !isMandatory || currentAnswered || isAnswered(current, answers);
 
   function navigate(dir: 1 | -1) {
     syncText(current);
@@ -208,7 +238,7 @@ export function SurveyShell() {
           ← Back
         </button>
         <button
-          className={`btn-next${answered ? " btn-next-ready" : ""}`}
+          className={`btn-next${currentAnswered ? " btn-next-ready" : ""}`}
           onClick={() => navigate(1)}
           style={{
             opacity: continueVisible ? 1 : 0,
@@ -249,7 +279,7 @@ function QuestionContent({
         <input
           className="q-input" type="text" placeholder="e.g. Arjun" maxLength={50}
           defaultValue={String(answers.q1 || "")}
-          ref={(el) => { textRefs.current[1] = el; }}
+          ref={(el) => setTextRef(textRefs, 1, el)}
           onChange={onTextChange}
         />
       ),
@@ -277,7 +307,7 @@ function QuestionContent({
           className="q-input" type="text"
           placeholder="e.g. Bengaluru, Hyderabad, Pune, Delhi…" maxLength={80}
           defaultValue={String(answers.q3 || "")}
-          ref={(el) => { textRefs.current[3] = el; }}
+          ref={(el) => setTextRef(textRefs, 3, el)}
           onChange={onTextChange}
         />
       ),
@@ -582,7 +612,7 @@ function QuestionContent({
             className="q-input" type="text"
             placeholder="Email or WhatsApp number" maxLength={100}
             defaultValue={String(answers.q21_contact || "")}
-            ref={(el) => { textRefs.current[211] = el; }}
+            ref={(el) => setTextRef(textRefs, 211, el)}
             style={{ marginBottom: 18 }}
             onChange={onTextChange}
           />
@@ -646,7 +676,7 @@ function TextareaQ({
         maxLength={maxLength}
         rows={4}
         defaultValue={defaultValue}
-        ref={(el) => { textRefs.current[qNum] = el; }}
+        ref={(el) => setTextRef(textRefs, qNum, el)}
         onChange={(e) => { setCount(e.target.value.length); onTextChange(); }}
       />
       <div className="char-count">
