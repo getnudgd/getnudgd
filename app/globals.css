@@ -33,6 +33,7 @@
   --success:    #10B981;
   --success-bg: #F0FDF4;
   --error:      #EF4444;
+  --error-bg:   #FEE2E2;
 
   --wa-green:  #16A34A;
   --wa-bg:     #F0FDF4;
@@ -173,7 +174,7 @@ a { text-decoration: none; }
 }
 .ui-badge-neutral { background: var(--ink-100); color: var(--ink-700); }
 .ui-badge-success { background: var(--success-bg); color: var(--success); }
-.ui-badge-error   { background: #FEE2E2; color: var(--error); }
+.ui-badge-error   { background: var(--error-bg); color: var(--error); }
 .ui-badge-primary { background: var(--primary-soft); color: var(--primary); }
 
 /* ============================================================
