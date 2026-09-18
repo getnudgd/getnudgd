@@ -1,0 +1,11 @@
+{$APP_DOMAIN} {
+	reverse_proxy web:3000
+}
+
+admin.{$APP_DOMAIN} {
+	@allowed remote_ip {$ADMIN_IP_ALLOWLIST}
+	handle @allowed {
+		reverse_proxy web:3000
+	}
+	respond 403
+}
