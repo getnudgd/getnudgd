@@ -177,6 +177,29 @@ a { text-decoration: none; }
 .ui-badge-error   { background: var(--error-bg); color: var(--error); }
 .ui-badge-primary { background: var(--primary-soft); color: var(--primary); }
 
+.ui-card {
+  background: var(--bg-card);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  padding: 20px;
+}
+
+.ui-input {
+  width: 100%;
+  padding: 13px 14px;
+  background: #fff;
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-button);
+  font-family: var(--font-body); font-size: 14px;
+  color: var(--ink-900);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.ui-input::placeholder { color: var(--fg-muted); }
+.ui-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 15%, transparent); }
+.ui-input.error { border-color: var(--error); box-shadow: 0 0 0 3px rgba(239,68,68,0.15); }
+
 /* ============================================================
    NAV
    ============================================================ */
