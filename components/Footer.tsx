@@ -1,9 +1,11 @@
+import { brand } from "@/src/config/brand";
+
 export function Footer() {
   return (
     <footer className="foot">
       <div className="foot-inner foot-social-row">
         <a
-          href="https://www.linkedin.com/company/getnudgd/"
+          href={brand.social.linkedin}
           target="_blank"
           rel="noopener noreferrer"
           className="foot-social"
@@ -15,7 +17,7 @@ export function Footer() {
           LinkedIn
         </a>
         <a
-          href="https://www.instagram.com/getnudgd?igsh=dWt3Z3NtcXV3eW5k"
+          href={brand.social.instagram}
           target="_blank"
           rel="noopener noreferrer"
           className="foot-social"

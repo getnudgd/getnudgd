@@ -1,3 +1,4 @@
+import { brand } from "@/src/config/brand";
 import { Nav } from "@/components/Nav";
 import { Hero } from "@/components/Hero";
 import { MarqueeTicker } from "@/components/MarqueeTicker";
@@ -9,9 +10,8 @@ import { Footer } from "@/components/Footer";
 import { FadeInSection } from "@/components/FadeInSection";
 
 export const metadata = {
-  title: "GetNudgd | Get vouched in by verified employees",
-  description:
-    "Sifarish toh hoti hai. Ab fair bhi hai. Get vouched in by verified employees at top Indian startups. Join the waitlist.",
+  title: `${brand.name} | ${brand.ctaGetVouched} by verified employees`,
+  description: `${brand.tagline} ${brand.ctaGetVouched} by verified employees at top Indian startups. Join the waitlist.`,
 };
 
 export default function LandingPage() {

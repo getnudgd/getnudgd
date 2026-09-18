@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Plus_Jakarta_Sans, Inter } from "next/font/google";
 import { Analytics } from "@vercel/analytics/react";
+import { brand } from "@/src/config/brand";
 import "./globals.css";
 
 const jakarta = Plus_Jakarta_Sans({
@@ -17,15 +18,14 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://getnudgd.com"),
-  title: "GetNudgd | Get referred by verified employees",
-  description:
-    "Sifarish toh hoti hai. Ab fair bhi hai. Get referred by verified employees at top Indian startups. Join the waitlist.",
+  metadataBase: new URL(brand.url),
+  title: `${brand.name} | ${brand.ctaGetVouched} by verified employees`,
+  description: `${brand.tagline} ${brand.ctaGetVouched} by verified employees at top Indian startups. Join the waitlist.`,
   openGraph: {
-    title: "GetNudgd",
-    description: "Get referred by someone on the inside.",
-    url: "https://getnudgd.com",
-    siteName: "GetNudgd",
+    title: brand.name,
+    description: `${brand.ctaGetVouched} by someone on the inside.`,
+    url: brand.url,
+    siteName: brand.name,
     images: [{ url: "/og.png", width: 1200, height: 630 }],
   },
   twitter: { card: "summary_large_image" },

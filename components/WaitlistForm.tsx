@@ -4,9 +4,10 @@
 // Animation 8 — Shake email row on invalid input
 
 import { useState } from "react";
+import { brand } from "@/src/config/brand";
 
 const WA_MESSAGE = encodeURIComponent(
-  "Hey! I just joined the GetNudgd waitlist. Get referred to your dream company 👉 getnudgd.com"
+  `Hey! I just joined the ${brand.name} waitlist. ${brand.ctaGetVouched} at your dream company 👉 ${brand.domain}`
 );
 const WA_LINK = `https://wa.me/?text=${WA_MESSAGE}`;
 
