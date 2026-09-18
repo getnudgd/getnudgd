@@ -502,7 +502,7 @@ function QuestionContent({
       content: (
         <ChipSelect
           options={[
-            { value: "Referrers take money, do nothing", label: "Referrers might take money and do nothing" },
+            { value: "Insiders take money, do nothing", label: "Insiders might take money and do nothing" },
             { value: "Employees not verified",           label: "Are the employees even real or verified?" },
             { value: "HR rejects anyway",                label: "Company HR might reject referred profiles anyway" },
             { value: "Feels ethically wrong",            label: "Paying for referrals feels ethically wrong" },
