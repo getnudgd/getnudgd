@@ -540,8 +540,9 @@ describe("createFakeDatabase requests proof and admin review", () => {
     await db.requests.submitProof(input);
     await db.requests.submitProof(input);
 
-    const proof = await db.requests.getProofByRequestId(requestId);
-    expect(proof?.textContent).toBe("First submission");
+    const proofs = await db.requests.listProofsByRequestId(requestId);
+    expect(proofs).toHaveLength(1);
+    expect(proofs[0].textContent).toBe("First submission");
   });
 
   it("submitProof throws RequestStateConflictError when fromState doesn't match", async () => {
@@ -571,6 +572,41 @@ describe("createFakeDatabase requests proof and admin review", () => {
     const { db } = createFakeDatabase();
     const { requestId } = await makeAcceptedRequest(db);
     expect(await db.requests.getProofByRequestId(requestId)).toBeNull();
+  });
+
+  it("getProofByRequestId returns the most recently submitted proof after a resubmission", async () => {
+    const { db } = createFakeDatabase();
+    const { requestId } = await makeAcceptedRequest(db);
+    await db.requests.submitProof({
+      idempotencyKey: "proof:latest:1",
+      requestId,
+      fromState: "ACCEPTED",
+      toState: "PROOF_PENDING",
+      proofType: "text",
+      textContent: "first attempt",
+    });
+    await db.requests.applyTransition({
+      idempotencyKey: "review:latest:reject",
+      requestId,
+      event: "reject",
+      fromState: "PROOF_PENDING",
+      toState: "ACCEPTED",
+      ledgerEntries: [],
+      ledgerEventType: "request.reject",
+    });
+    await db.requests.submitProof({
+      idempotencyKey: "proof:latest:2",
+      requestId,
+      fromState: "ACCEPTED",
+      toState: "PROOF_PENDING",
+      proofType: "text",
+      textContent: "second attempt",
+    });
+
+    const latest = await db.requests.getProofByRequestId(requestId);
+    expect(latest?.textContent).toBe("second attempt");
+    const all = await db.requests.listProofsByRequestId(requestId);
+    expect(all).toHaveLength(2);
   });
 
   it("applyTransition writes an admin_audit_log row when adminAudit is provided", async () => {

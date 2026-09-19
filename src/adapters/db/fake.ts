@@ -369,7 +369,11 @@ export function createFakeDatabase(): {
         return insiderRequestRows.filter((r) => r.state === state);
       },
       async getProofByRequestId(requestId) {
-        return verificationProofRows.find((p) => p.requestId === requestId) ?? null;
+        const matches = verificationProofRows.filter((p) => p.requestId === requestId);
+        return matches.length > 0 ? matches[matches.length - 1] : null;
+      },
+      async listProofsByRequestId(requestId) {
+        return verificationProofRows.filter((p) => p.requestId === requestId);
       },
       async listAuditLogByTarget(targetType, targetId) {
         return adminAuditLogRows.filter((r) => r.targetType === targetType && r.targetId === targetId);

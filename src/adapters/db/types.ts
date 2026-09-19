@@ -235,6 +235,7 @@ export interface Database {
     getById(requestId: string): Promise<InsiderRequestRecord | null>;
     listByState(state: string): Promise<InsiderRequestRecord[]>;
     getProofByRequestId(requestId: string): Promise<VerificationProofRecord | null>;
+    listProofsByRequestId(requestId: string): Promise<VerificationProofRecord[]>;
     listAuditLogByTarget(targetType: string, targetId: string): Promise<AdminAuditLogRecord[]>;
   };
 }

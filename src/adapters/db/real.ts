@@ -1,4 +1,4 @@
-import { eq, and, sum, isNull, isNotNull, gt } from "drizzle-orm";
+import { eq, and, sum, isNull, isNotNull, gt, desc } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
   ledgerAccounts,
@@ -512,8 +512,17 @@ export function createRealDatabase(db: NodePgDatabase): Database {
         return rows as InsiderRequestRecord[];
       },
       async getProofByRequestId(requestId) {
-        const [row] = await db.select().from(verificationProofs).where(eq(verificationProofs.requestId, requestId));
+        const [row] = await db
+          .select()
+          .from(verificationProofs)
+          .where(eq(verificationProofs.requestId, requestId))
+          .orderBy(desc(verificationProofs.createdAt))
+          .limit(1);
         return (row as VerificationProofRecord) ?? null;
+      },
+      async listProofsByRequestId(requestId) {
+        const rows = await db.select().from(verificationProofs).where(eq(verificationProofs.requestId, requestId));
+        return rows as VerificationProofRecord[];
       },
       async listAuditLogByTarget(targetType, targetId) {
         const rows = await db
