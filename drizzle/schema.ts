@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, integer, timestamp, jsonb, boolean, uniqueIndex, check } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, integer, timestamp, jsonb, boolean, uniqueIndex, index, check } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 export const appConfig = pgTable(
@@ -176,6 +176,9 @@ export const insiderRequests = pgTable(
       "insider_requests_state_check",
       sql`${table.state} in ('SENT','ACCEPTED','DECLINED','EXPIRED','CANCELLED','PROOF_PENDING','SUBMITTED','INTERVIEW','COMPLETE','NO_INTERVIEW','CLOSED')`
     ),
+    seekerProfileIdIdx: index("insider_requests_seeker_profile_id_idx").on(table.seekerProfileId),
+    insiderProfileIdIdx: index("insider_requests_insider_profile_id_idx").on(table.insiderProfileId),
+    stateIdx: index("insider_requests_state_idx").on(table.state),
   })
 );
 
@@ -192,5 +195,38 @@ export const requestEvents = pgTable(
   },
   (table) => ({
     idempotencyKeyIdx: uniqueIndex("request_events_idempotency_key_idx").on(table.idempotencyKey),
+    requestIdIdx: index("request_events_request_id_idx").on(table.requestId),
+  })
+);
+
+export const verificationProofs = pgTable(
+  "verification_proofs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    requestId: uuid("request_id").notNull().references(() => insiderRequests.id),
+    proofType: text("proof_type").notNull(),
+    objectKey: text("object_key"),
+    textContent: text("text_content"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    proofTypeCheck: check("verification_proofs_proof_type_check", sql`${table.proofType} in ('screenshot','text')`),
+    requestIdIdx: index("verification_proofs_request_id_idx").on(table.requestId),
+  })
+);
+
+export const adminAuditLog = pgTable(
+  "admin_audit_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    adminUserId: uuid("admin_user_id").notNull().references(() => users.id),
+    action: text("action").notNull(),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id").notNull(),
+    detail: text("detail"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    targetIdx: index("admin_audit_log_target_idx").on(table.targetType, table.targetId),
   })
 );

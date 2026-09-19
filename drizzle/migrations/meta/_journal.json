@@ -50,6 +50,20 @@
       "when": 1789839161186,
       "tag": "0006_companies_name_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789841421775,
+      "tag": "0007_proof_admin_verify",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789841421776,
+      "tag": "0008_admin_audit_log_append_only",
+      "breakpoints": true
     }
   ]
 }
