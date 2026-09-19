@@ -6,10 +6,10 @@ export default function InsiderLayout({ children }: { children: ReactNode }) {
     <div className="insider-scope app-shell">
       <main className="app-shell-main">{children}</main>
       <nav className="app-shell-bottom-nav" aria-label="Primary">
-        <Link href="/dashboard">Home</Link>
-        <Link href="/requests">Inbox</Link>
-        <Link href="/rewards">Rewards</Link>
-        <Link href="/profile">Profile</Link>
+        <Link href="/insider/dashboard">Home</Link>
+        <Link href="/insider/requests">Inbox</Link>
+        <Link href="/insider/rewards">Rewards</Link>
+        <Link href="/insider/profile">Profile</Link>
       </nav>
     </div>
   );

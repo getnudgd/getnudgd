@@ -106,8 +106,8 @@ External: Razorpay · WhatsApp Cloud API via BSP · OpenAI · Brevo · gift-card
 ```
 app/
   (public)/            landing, survey, login, insider landing
-  (seeker)/            dashboard, resume/new, resume/[id], insiders, insiders/[id], requests, requests/[id], credits, profile
-  (insider)/           dashboard, requests (inbox), requests/[id], rewards, profile
+  seeker/              dashboard, resume/new, resume/[id], insiders, insiders/[id], requests, requests/[id], credits, profile   (URL-prefixed: /seeker/*)
+  insider/             dashboard, requests (inbox), requests/[id], rewards, profile                                            (URL-prefixed: /insider/*)
   (admin)/admin/       requests, users, redemptions, flags, jobs, audit
   api/v1/              JSON handlers (bot + future mobile)
   api/webhooks/        razorpay, whatsapp
@@ -283,9 +283,11 @@ Everything under `app/**` pages and layouts, `components/**`, `app/globals.css`,
 | Group | Layout responsibilities | Access |
 |---|---|---|
 | `app/(public)` | marketing nav, footer, `.seeker-scope` default | anyone |
-| `app/(seeker)` | app shell with bottom nav (Home, Insiders, Requests, Profile), `.seeker-scope` | `role in (seeker, both)` |
-| `app/(insider)` | app shell (Home, Inbox, Rewards, Profile), `.insider-scope` | `role in (insider, both)` and verified |
+| `app/seeker` | app shell with bottom nav (Home, Insiders, Requests, Profile), `.seeker-scope` | `role in (seeker, both)` |
+| `app/insider` | app shell (Home, Inbox, Rewards, Profile), `.insider-scope` | `role in (insider, both)` and verified |
 | `app/(admin)/admin` | dense desktop tables, no design polish required | `role = admin` |
+
+`app/seeker` and `app/insider` are literal path segments, not route groups — every Seeker route lives under `/seeker/*` and every Insider route under `/insider/*`, so the two role apps can never collide on a URL (route groups don't affect the URL and originally caused exactly that collision on `/dashboard`, `/requests`, `/profile`; see the Phase 0 final review). `app/(public)` and `app/(admin)/admin` remain true route groups since nothing else competes for their URLs.
 
 Layouts read the session server-side and redirect; pages never re-check auth themselves. Users with `role = both` get a role switcher in the header that sets a cookie the layouts respect.
 
@@ -309,10 +311,10 @@ Layouts read the session server-side and redirect; pages never re-check auth the
 
 Fields, validation, and next actions for every screen are specified in `referly-page-by-page-flow.md` and `referly-insider-user-journey.md` in the vault (apply the locked vocabulary and GetNudgd brand when reading them).
 
-Public: landing `/`, `/survey`, `/login`, `/insider` landing.
+Public: landing `/`, `/survey`, `/login`, `/for-insiders` landing (renamed from the ambiguous "`/insider` landing" — that URL is now reserved for the authenticated Insider app).
 Onboarding: `/onboard` role step → Seeker profile step or Insider profile + work-email OTP step.
-Seeker: `/dashboard`, `/resume/new` (with job progress), `/resume/[id]`, `/insiders` (search, filters, sort), `/insiders/[id]` (profile + send-request sheet, credit gate), `/requests`, `/requests/[id]` (timeline), `/credits` (packs, Razorpay checkout, history), `/profile`.
-Insider: `/dashboard` (pending with 48h countdown, points, re-verify countdown), `/requests` inbox, `/requests/[id]` (accept/decline, proof upload), `/rewards` (wallet, redeem modal with brand and denomination stepper, PAN when required), `/profile` (availability toggle, weekly limit, re-verify).
+Seeker (all under `/seeker/*`): `/seeker/dashboard`, `/seeker/resume/new` (with job progress), `/seeker/resume/[id]`, `/seeker/insiders` (search, filters, sort), `/seeker/insiders/[id]` (profile + send-request sheet, credit gate), `/seeker/requests`, `/seeker/requests/[id]` (timeline), `/seeker/credits` (packs, Razorpay checkout, history), `/seeker/profile`.
+Insider (all under `/insider/*`): `/insider/dashboard` (pending with 48h countdown, points, re-verify countdown), `/insider/requests` inbox, `/insider/requests/[id]` (accept/decline, proof upload), `/insider/rewards` (wallet, redeem modal with brand and denomination stepper, PAN when required), `/insider/profile` (availability toggle, weekly limit, re-verify).
 Admin: `/admin/requests` (verify/reject with reason), `/admin/users` (grant credits), `/admin/redemptions`, `/admin/flags`, `/admin/jobs`, `/admin/audit`.
 
 ### 4.6 Component conventions
@@ -343,8 +345,8 @@ Admin: `/admin/requests` (verify/reject with reason), `/admin/users` (grant cred
 ### 4.9 Frontend backlog (ordered)
 
 Phase 0: move survey and landing into `app/(public)`, `/` = landing; `components/ui` primitives; role-scoped app shell layouts; brand config wiring.
-Phase 1: `/login` + `/onboard` (both roles, work-email OTP) → `/insiders` + `/insiders/[id]` with send-request sheet → `/requests` + `/requests/[id]` timeline (Seeker and Insider views) → proof upload → Seeker and Insider dashboards → `/rewards` on manual vendor → `/admin` tables.
-Phase 2: `/credits` with Razorpay checkout → `/resume/new` with progress → `/resume/[id]` → interview confirmation UI → admin flags.
+Phase 1: `/login` + `/onboard` (both roles, work-email OTP) → `/seeker/insiders` + `/seeker/insiders/[id]` with send-request sheet → `/seeker/requests` + `/seeker/requests/[id]` and `/insider/requests` + `/insider/requests/[id]` timeline (Seeker and Insider views) → proof upload → Seeker and Insider dashboards → `/insider/rewards` on manual vendor → `/admin` tables.
+Phase 2: `/seeker/credits` with Razorpay checkout → `/seeker/resume/new` with progress → `/seeker/resume/[id]` → interview confirmation UI → admin flags.
 Phase 3: PWA manifest and install prompt → SSE live status → prefill landing from WhatsApp tokens.
 
 ---

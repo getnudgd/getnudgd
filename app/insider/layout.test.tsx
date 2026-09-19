@@ -10,6 +10,6 @@ describe("InsiderLayout", () => {
       </InsiderLayout>
     );
     expect(screen.getByText("Inbox content")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Rewards" })).toHaveAttribute("href", "/rewards");
+    expect(screen.getByRole("link", { name: "Rewards" })).toHaveAttribute("href", "/insider/rewards");
   });
 });

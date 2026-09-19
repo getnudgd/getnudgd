@@ -11,6 +11,6 @@ describe("SeekerLayout", () => {
     );
     expect(screen.getByText("Dashboard content")).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Primary" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Insiders" })).toHaveAttribute("href", "/insiders");
+    expect(screen.getByRole("link", { name: "Insiders" })).toHaveAttribute("href", "/seeker/insiders");
   });
 });
