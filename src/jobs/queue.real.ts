@@ -11,9 +11,11 @@ export function createRealQueueClient(connectionString: string): QueueClient {
       await boss.stop();
     },
     async send(queueName, payload) {
+      await boss.createQueue(queueName);
       return boss.send(queueName, payload as object);
     },
     async work(queueName, handler) {
+      await boss.createQueue(queueName);
       await boss.work(queueName, async (jobs) => {
         for (const job of jobs) {
           await handler(job.data);
