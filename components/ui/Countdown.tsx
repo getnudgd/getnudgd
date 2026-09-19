@@ -16,7 +16,7 @@ function formatRemaining(ms: number): string {
 
 export function Countdown({ deadline, serverNow }: CountdownProps) {
   const [clientOffsetMs] = useState(() => serverNow.getTime() - Date.now());
-  const [now, setNow] = useState(() => Date.now() + clientOffsetMs);
+  const [now, setNow] = useState(() => serverNow.getTime());
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now() + clientOffsetMs), 30_000);
