@@ -103,6 +103,60 @@ export interface InsiderSearchResult {
   companyTier: string;
 }
 
+export interface InsiderRequestRecord {
+  id: string;
+  seekerProfileId: string;
+  insiderProfileId: string;
+  companyId: string;
+  state: string;
+  creditCost: number;
+  rulesVersion: number;
+  createdAt: Date;
+}
+
+export interface RequestEventRecord {
+  id: string;
+  requestId: string;
+  idempotencyKey: string;
+  event: string;
+  fromState: string | null;
+  toState: string;
+  createdAt: Date;
+}
+
+export interface SendInsiderRequestInput {
+  idempotencyKey: string;
+  seekerProfileId: string;
+  insiderProfileId: string;
+  companyId: string;
+  creditCost: number;
+  rulesVersion: number;
+}
+
+export interface ApplyRequestTransitionInput {
+  idempotencyKey: string;
+  requestId: string;
+  event: string;
+  fromState: string;
+  toState: string;
+  ledgerEntries: PostLedgerEntryInput[];
+  ledgerEventType: string;
+}
+
+export class InsufficientBalanceError extends Error {
+  constructor(ownerType: LedgerOwnerType, ownerId: string, currency: LedgerCurrency, required: number, available: number) {
+    super(`Insufficient ${currency} balance for ${ownerType}:${ownerId} (need ${required}, have ${available})`);
+    this.name = "InsufficientBalanceError";
+  }
+}
+
+export class RequestStateConflictError extends Error {
+  constructor(requestId: string, expectedState: string, actualState: string) {
+    super(`Request ${requestId} expected state "${expectedState}" but was "${actualState}"`);
+    this.name = "RequestStateConflictError";
+  }
+}
+
 export interface Database {
   ledger: {
     postTxn(input: PostLedgerTxnInput): Promise<LedgerTxnRecord>;
@@ -135,5 +189,10 @@ export interface Database {
     listInsiders(filters: InsiderSearchFilters): Promise<InsiderSearchResult[]>;
     getInsiderById(insiderProfileId: string): Promise<InsiderSearchResult | null>;
     setAvailability(insiderProfileId: string, available: boolean): Promise<void>;
+  };
+  requests: {
+    sendRequest(input: SendInsiderRequestInput): Promise<InsiderRequestRecord>;
+    applyTransition(input: ApplyRequestTransitionInput): Promise<InsiderRequestRecord>;
+    getById(requestId: string): Promise<InsiderRequestRecord | null>;
   };
 }

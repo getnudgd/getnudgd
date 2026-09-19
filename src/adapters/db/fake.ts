@@ -15,6 +15,10 @@ import {
   ResumeRecord,
   InsiderSearchFilters,
   InsiderSearchResult,
+  InsiderRequestRecord,
+  RequestEventRecord,
+  InsufficientBalanceError,
+  RequestStateConflictError,
 } from "./types";
 
 function assertZeroSum(entries: PostLedgerTxnInput["entries"]): void {
@@ -40,6 +44,8 @@ export function createFakeDatabase(): {
   const companyDomainToId = new Map<string, string>();
   const otps: { insiderProfileId: string; codeHash: string; expiresAt: Date; consumedAt: Date | null }[] = [];
   const resumeRows: ResumeRecord[] = [];
+  const insiderRequestRows: InsiderRequestRecord[] = [];
+  const requestEventRows: RequestEventRecord[] = [];
   let nextId = 1;
   const genId = () => `fake-${nextId++}`;
 
@@ -197,6 +203,113 @@ export function createFakeDatabase(): {
       async setAvailability(insiderProfileId: string, available: boolean) {
         const profile = insiderProfiles.find((p) => p.id === insiderProfileId);
         if (profile) profile.available = available;
+      },
+    },
+    requests: {
+      async sendRequest(input) {
+        const existingEvent = requestEventRows.find((e) => e.idempotencyKey === input.idempotencyKey);
+        if (existingEvent) {
+          const existing = insiderRequestRows.find((r) => r.id === existingEvent.requestId);
+          if (existing) return existing;
+        }
+
+        const seekerAccount = accounts.find(
+          (a) => a.ownerType === "seeker" && a.ownerId === input.seekerProfileId && a.currency === "credits"
+        );
+        const balance = seekerAccount
+          ? txns
+              .flatMap((t) => t.entries)
+              .filter((e) => e.accountId === seekerAccount.id)
+              .reduce((sum, e) => sum + e.amount, 0)
+          : 0;
+        if (balance < input.creditCost) {
+          throw new InsufficientBalanceError("seeker", input.seekerProfileId, "credits", input.creditCost, balance);
+        }
+
+        const requestId = genId();
+        const record: InsiderRequestRecord = {
+          id: requestId,
+          seekerProfileId: input.seekerProfileId,
+          insiderProfileId: input.insiderProfileId,
+          companyId: input.companyId,
+          state: "SENT",
+          creditCost: input.creditCost,
+          rulesVersion: input.rulesVersion,
+          createdAt: new Date(),
+        };
+        insiderRequestRows.push(record);
+
+        const seekerAcc = findOrCreateAccount("seeker", input.seekerProfileId, "credits");
+        const escrowAcc = findOrCreateAccount("escrow", requestId, "credits");
+        const txnId = genId();
+        txns.push({
+          id: txnId,
+          idempotencyKey: `${input.idempotencyKey}:ledger`,
+          eventType: "request.send",
+          createdAt: new Date(),
+          entries: [
+            { id: genId(), txnId, accountId: seekerAcc.id, currency: "credits", amount: -input.creditCost },
+            { id: genId(), txnId, accountId: escrowAcc.id, currency: "credits", amount: input.creditCost },
+          ],
+        });
+
+        requestEventRows.push({
+          id: genId(),
+          requestId,
+          idempotencyKey: input.idempotencyKey,
+          event: "send",
+          fromState: null,
+          toState: "SENT",
+          createdAt: new Date(),
+        });
+
+        return record;
+      },
+      async applyTransition(input) {
+        const existingEvent = requestEventRows.find((e) => e.idempotencyKey === input.idempotencyKey);
+        if (existingEvent) {
+          const current = insiderRequestRows.find((r) => r.id === input.requestId);
+          if (current) return current;
+        }
+
+        const current = insiderRequestRows.find((r) => r.id === input.requestId);
+        if (!current) throw new Error(`Insider request ${input.requestId} not found`);
+        if (current.state !== input.fromState) {
+          throw new RequestStateConflictError(input.requestId, input.fromState, current.state);
+        }
+
+        current.state = input.toState;
+
+        if (input.ledgerEntries.length > 0) {
+          assertZeroSum(input.ledgerEntries);
+          const txnId = genId();
+          const entries = input.ledgerEntries.map((e) => {
+            const account = findOrCreateAccount(e.ownerType, e.ownerId, e.currency);
+            return { id: genId(), txnId, accountId: account.id, currency: e.currency, amount: e.amount };
+          });
+          txns.push({
+            id: txnId,
+            idempotencyKey: `${input.idempotencyKey}:ledger`,
+            eventType: input.ledgerEventType,
+            createdAt: new Date(),
+            entries,
+          });
+        }
+
+        requestEventRows.push({
+          id: genId(),
+          requestId: input.requestId,
+          idempotencyKey: input.idempotencyKey,
+          event: input.event,
+          fromState: input.fromState,
+          toState: input.toState,
+          createdAt: new Date(),
+        });
+
+        return current;
+      },
+      async getById(requestId) {
+        return insiderRequestRows.find((r) => r.id === requestId) ?? null;
       },
     },
   };

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createFakeDatabase } from "./fake";
-import { LedgerImbalanceError } from "./types";
+import { LedgerImbalanceError, InsufficientBalanceError, RequestStateConflictError } from "./types";
 
 describe("createFakeDatabase ledger", () => {
   it("posts a balanced transaction and reflects it in balances", async () => {
@@ -271,5 +271,206 @@ describe("createFakeDatabase insiders", () => {
   it("getInsiderById returns null when not found", async () => {
     const { db } = createFakeDatabase();
     expect(await db.insiders.getInsiderById("nope")).toBeNull();
+  });
+});
+
+describe("createFakeDatabase requests", () => {
+  async function seedSeekerWithCredits(db: ReturnType<typeof createFakeDatabase>["db"], amount: number): Promise<string> {
+    const user = await db.identity.findOrCreateUser(`fb-req-${amount}-${Math.random()}`, `req${amount}@seeker.com`, "seeker");
+    const profile = await db.identity.createSeekerProfile(user.id, "Test Seeker");
+    if (amount > 0) {
+      await db.ledger.postTxn({
+        idempotencyKey: `grant:${profile.id}:${amount}`,
+        eventType: "credits.grant",
+        entries: [
+          { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -amount },
+          { ownerType: "seeker", ownerId: profile.id, currency: "credits", amount },
+        ],
+      });
+    }
+    return profile.id;
+  }
+
+  it("creates a SENT request and moves credits from seeker to escrow", async () => {
+    const { db } = createFakeDatabase();
+    const seekerProfileId = await seedSeekerWithCredits(db, 5);
+
+    const request = await db.requests.sendRequest({
+      idempotencyKey: "send:1",
+      seekerProfileId,
+      insiderProfileId: "insider-1",
+      companyId: "company-1",
+      creditCost: 3,
+      rulesVersion: 1,
+    });
+
+    expect(request.state).toBe("SENT");
+    expect(await db.ledger.getBalance("seeker", seekerProfileId, "credits")).toBe(2);
+    expect(await db.ledger.getBalance("escrow", request.id, "credits")).toBe(3);
+  });
+
+  it("is idempotent: calling sendRequest twice with the same idempotencyKey returns the same request and does not double-charge", async () => {
+    const { db } = createFakeDatabase();
+    const seekerProfileId = await seedSeekerWithCredits(db, 5);
+
+    const first = await db.requests.sendRequest({
+      idempotencyKey: "send:2",
+      seekerProfileId,
+      insiderProfileId: "insider-1",
+      companyId: "company-1",
+      creditCost: 3,
+      rulesVersion: 1,
+    });
+    const second = await db.requests.sendRequest({
+      idempotencyKey: "send:2",
+      seekerProfileId,
+      insiderProfileId: "insider-1",
+      companyId: "company-1",
+      creditCost: 3,
+      rulesVersion: 1,
+    });
+
+    expect(second.id).toBe(first.id);
+    expect(await db.ledger.getBalance("seeker", seekerProfileId, "credits")).toBe(2);
+  });
+
+  it("throws InsufficientBalanceError when the seeker cannot cover the cost", async () => {
+    const { db } = createFakeDatabase();
+    const seekerProfileId = await seedSeekerWithCredits(db, 1);
+
+    await expect(
+      db.requests.sendRequest({
+        idempotencyKey: "send:3",
+        seekerProfileId,
+        insiderProfileId: "insider-1",
+        companyId: "company-1",
+        creditCost: 3,
+        rulesVersion: 1,
+      })
+    ).rejects.toThrow(InsufficientBalanceError);
+  });
+
+  it("getById returns null for an unknown request", async () => {
+    const { db } = createFakeDatabase();
+    expect(await db.requests.getById("nope")).toBeNull();
+  });
+
+  it("applyTransition moves a SENT request to ACCEPTED with no ledger movement", async () => {
+    const { db } = createFakeDatabase();
+    const seekerProfileId = await seedSeekerWithCredits(db, 5);
+    const request = await db.requests.sendRequest({
+      idempotencyKey: "send:4",
+      seekerProfileId,
+      insiderProfileId: "insider-1",
+      companyId: "company-1",
+      creditCost: 3,
+      rulesVersion: 1,
+    });
+
+    const updated = await db.requests.applyTransition({
+      idempotencyKey: `request:${request.id}:accept`,
+      requestId: request.id,
+      event: "accept",
+      fromState: "SENT",
+      toState: "ACCEPTED",
+      ledgerEntries: [],
+      ledgerEventType: "request.accept",
+    });
+
+    expect(updated.state).toBe("ACCEPTED");
+    expect(await db.ledger.getBalance("escrow", request.id, "credits")).toBe(3);
+  });
+
+  it("applyTransition refunds escrow to the seeker on decline", async () => {
+    const { db } = createFakeDatabase();
+    const seekerProfileId = await seedSeekerWithCredits(db, 5);
+    const request = await db.requests.sendRequest({
+      idempotencyKey: "send:5",
+      seekerProfileId,
+      insiderProfileId: "insider-1",
+      companyId: "company-1",
+      creditCost: 3,
+      rulesVersion: 1,
+    });
+
+    await db.requests.applyTransition({
+      idempotencyKey: `request:${request.id}:decline`,
+      requestId: request.id,
+      event: "decline",
+      fromState: "SENT",
+      toState: "DECLINED",
+      ledgerEntries: [
+        { ownerType: "escrow", ownerId: request.id, currency: "credits", amount: -3 },
+        { ownerType: "seeker", ownerId: seekerProfileId, currency: "credits", amount: 3 },
+      ],
+      ledgerEventType: "request.decline",
+    });
+
+    expect(await db.ledger.getBalance("escrow", request.id, "credits")).toBe(0);
+    expect(await db.ledger.getBalance("seeker", seekerProfileId, "credits")).toBe(5);
+  });
+
+  it("applyTransition is idempotent: reapplying the same idempotencyKey does not re-refund", async () => {
+    const { db } = createFakeDatabase();
+    const seekerProfileId = await seedSeekerWithCredits(db, 5);
+    const request = await db.requests.sendRequest({
+      idempotencyKey: "send:6",
+      seekerProfileId,
+      insiderProfileId: "insider-1",
+      companyId: "company-1",
+      creditCost: 3,
+      rulesVersion: 1,
+    });
+    const transitionInput = {
+      idempotencyKey: `request:${request.id}:decline`,
+      requestId: request.id,
+      event: "decline",
+      fromState: "SENT",
+      toState: "DECLINED",
+      ledgerEntries: [
+        { ownerType: "escrow" as const, ownerId: request.id, currency: "credits" as const, amount: -3 },
+        { ownerType: "seeker" as const, ownerId: seekerProfileId, currency: "credits" as const, amount: 3 },
+      ],
+      ledgerEventType: "request.decline",
+    };
+
+    await db.requests.applyTransition(transitionInput);
+    await db.requests.applyTransition(transitionInput);
+
+    expect(await db.ledger.getBalance("seeker", seekerProfileId, "credits")).toBe(5);
+  });
+
+  it("applyTransition throws RequestStateConflictError when fromState doesn't match the current state", async () => {
+    const { db } = createFakeDatabase();
+    const seekerProfileId = await seedSeekerWithCredits(db, 5);
+    const request = await db.requests.sendRequest({
+      idempotencyKey: "send:7",
+      seekerProfileId,
+      insiderProfileId: "insider-1",
+      companyId: "company-1",
+      creditCost: 3,
+      rulesVersion: 1,
+    });
+    await db.requests.applyTransition({
+      idempotencyKey: `request:${request.id}:accept`,
+      requestId: request.id,
+      event: "accept",
+      fromState: "SENT",
+      toState: "ACCEPTED",
+      ledgerEntries: [],
+      ledgerEventType: "request.accept",
+    });
+
+    await expect(
+      db.requests.applyTransition({
+        idempotencyKey: `request:${request.id}:decline`,
+        requestId: request.id,
+        event: "decline",
+        fromState: "SENT",
+        toState: "DECLINED",
+        ledgerEntries: [],
+        ledgerEventType: "request.decline",
+      })
+    ).rejects.toThrow(RequestStateConflictError);
   });
 });

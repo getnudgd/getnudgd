@@ -12,6 +12,8 @@ import {
   companyDomains,
   workEmailOtps,
   resumes,
+  insiderRequests,
+  requestEvents,
 } from "../../../drizzle/schema";
 import type {
   Database,
@@ -26,8 +28,9 @@ import type {
   ResumeRecord,
   InsiderSearchFilters,
   InsiderSearchResult,
+  InsiderRequestRecord,
 } from "./types";
-import { LedgerImbalanceError } from "./types";
+import { LedgerImbalanceError, InsufficientBalanceError, RequestStateConflictError } from "./types";
 
 function toLedgerAccountRecord(row: {
   id: string;
@@ -279,6 +282,160 @@ export function createRealDatabase(db: NodePgDatabase): Database {
       },
       async setAvailability(insiderProfileId, available) {
         await db.update(insiderProfiles).set({ available }).where(eq(insiderProfiles.id, insiderProfileId));
+      },
+    },
+    requests: {
+      async sendRequest(input) {
+        return db.transaction(async (tx) => {
+          const [existingEvent] = await tx
+            .select()
+            .from(requestEvents)
+            .where(eq(requestEvents.idempotencyKey, input.idempotencyKey));
+          if (existingEvent) {
+            const [existing] = await tx.select().from(insiderRequests).where(eq(insiderRequests.id, existingEvent.requestId));
+            if (existing) return existing as InsiderRequestRecord;
+          }
+
+          let [seekerAccount] = await tx
+            .select()
+            .from(ledgerAccounts)
+            .where(
+              and(
+                eq(ledgerAccounts.ownerType, "seeker"),
+                eq(ledgerAccounts.ownerId, input.seekerProfileId),
+                eq(ledgerAccounts.currency, "credits")
+              )
+            )
+            .for("update");
+
+          let balance = 0;
+          if (seekerAccount) {
+            const [row] = await tx
+              .select({ total: sum(ledgerEntries.amount) })
+              .from(ledgerEntries)
+              .where(eq(ledgerEntries.accountId, seekerAccount.id));
+            balance = Number(row?.total ?? 0);
+          }
+          if (balance < input.creditCost) {
+            throw new InsufficientBalanceError("seeker", input.seekerProfileId, "credits", input.creditCost, balance);
+          }
+
+          if (!seekerAccount) {
+            [seekerAccount] = await tx
+              .insert(ledgerAccounts)
+              .values({ ownerType: "seeker", ownerId: input.seekerProfileId, currency: "credits" })
+              .returning();
+          }
+
+          const [requestRow] = await tx
+            .insert(insiderRequests)
+            .values({
+              seekerProfileId: input.seekerProfileId,
+              insiderProfileId: input.insiderProfileId,
+              companyId: input.companyId,
+              state: "SENT",
+              creditCost: input.creditCost,
+              rulesVersion: input.rulesVersion,
+            })
+            .returning();
+
+          const [escrowAccount] = await tx
+            .insert(ledgerAccounts)
+            .values({ ownerType: "escrow", ownerId: requestRow.id, currency: "credits" })
+            .returning();
+
+          const [txnRow] = await tx
+            .insert(ledgerTxns)
+            .values({ idempotencyKey: `${input.idempotencyKey}:ledger`, eventType: "request.send" })
+            .returning();
+
+          await tx.insert(ledgerEntries).values([
+            { txnId: txnRow.id, accountId: seekerAccount.id, currency: "credits", amount: -input.creditCost },
+            { txnId: txnRow.id, accountId: escrowAccount.id, currency: "credits", amount: input.creditCost },
+          ]);
+
+          await tx.insert(requestEvents).values({
+            requestId: requestRow.id,
+            idempotencyKey: input.idempotencyKey,
+            event: "send",
+            fromState: null,
+            toState: "SENT",
+          });
+
+          return requestRow as InsiderRequestRecord;
+        });
+      },
+      async applyTransition(input) {
+        return db.transaction(async (tx) => {
+          const [existingEvent] = await tx
+            .select()
+            .from(requestEvents)
+            .where(eq(requestEvents.idempotencyKey, input.idempotencyKey));
+          if (existingEvent) {
+            const [current] = await tx.select().from(insiderRequests).where(eq(insiderRequests.id, input.requestId));
+            if (current) return current as InsiderRequestRecord;
+          }
+
+          const [current] = await tx
+            .select()
+            .from(insiderRequests)
+            .where(eq(insiderRequests.id, input.requestId))
+            .for("update");
+          if (!current) throw new Error(`Insider request ${input.requestId} not found`);
+          if (current.state !== input.fromState) {
+            throw new RequestStateConflictError(input.requestId, input.fromState, current.state);
+          }
+
+          const [updated] = await tx
+            .update(insiderRequests)
+            .set({ state: input.toState })
+            .where(eq(insiderRequests.id, input.requestId))
+            .returning();
+
+          if (input.ledgerEntries.length > 0) {
+            const [txnRow] = await tx
+              .insert(ledgerTxns)
+              .values({ idempotencyKey: `${input.idempotencyKey}:ledger`, eventType: input.ledgerEventType })
+              .returning();
+
+            for (const entry of input.ledgerEntries) {
+              let [account] = await tx
+                .select()
+                .from(ledgerAccounts)
+                .where(
+                  and(
+                    eq(ledgerAccounts.ownerType, entry.ownerType),
+                    eq(ledgerAccounts.ownerId, entry.ownerId),
+                    eq(ledgerAccounts.currency, entry.currency)
+                  )
+                )
+                .for("update");
+              if (!account) {
+                [account] = await tx
+                  .insert(ledgerAccounts)
+                  .values({ ownerType: entry.ownerType, ownerId: entry.ownerId, currency: entry.currency })
+                  .returning();
+              }
+              await tx
+                .insert(ledgerEntries)
+                .values({ txnId: txnRow.id, accountId: account.id, currency: entry.currency, amount: entry.amount });
+            }
+          }
+
+          await tx.insert(requestEvents).values({
+            requestId: input.requestId,
+            idempotencyKey: input.idempotencyKey,
+            event: input.event,
+            fromState: input.fromState,
+            toState: input.toState,
+          });
+
+          return updated as InsiderRequestRecord;
+        });
+      },
+      async getById(requestId) {
+        const [row] = await db.select().from(insiderRequests).where(eq(insiderRequests.id, requestId));
+        return (row as InsiderRequestRecord) ?? null;
       },
     },
   };
