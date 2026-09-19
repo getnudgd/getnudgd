@@ -133,6 +133,43 @@ export interface SendInsiderRequestInput {
   rulesVersion: number;
 }
 
+export interface VerificationProofRecord {
+  id: string;
+  requestId: string;
+  proofType: string;
+  objectKey: string | null;
+  textContent: string | null;
+  createdAt: Date;
+}
+
+export interface AdminAuditLogRecord {
+  id: string;
+  adminUserId: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  detail: string | null;
+  createdAt: Date;
+}
+
+export interface SubmitProofInput {
+  idempotencyKey: string;
+  requestId: string;
+  fromState: string;
+  toState: string;
+  proofType: string;
+  objectKey?: string;
+  textContent?: string;
+}
+
+export interface AdminAuditInput {
+  adminUserId: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  detail?: string;
+}
+
 export interface ApplyRequestTransitionInput {
   idempotencyKey: string;
   requestId: string;
@@ -141,6 +178,7 @@ export interface ApplyRequestTransitionInput {
   toState: string;
   ledgerEntries: PostLedgerEntryInput[];
   ledgerEventType: string;
+  adminAudit?: AdminAuditInput;
 }
 
 export class InsufficientBalanceError extends Error {
@@ -193,6 +231,10 @@ export interface Database {
   requests: {
     sendRequest(input: SendInsiderRequestInput): Promise<InsiderRequestRecord>;
     applyTransition(input: ApplyRequestTransitionInput): Promise<InsiderRequestRecord>;
+    submitProof(input: SubmitProofInput): Promise<InsiderRequestRecord>;
     getById(requestId: string): Promise<InsiderRequestRecord | null>;
+    listByState(state: string): Promise<InsiderRequestRecord[]>;
+    getProofByRequestId(requestId: string): Promise<VerificationProofRecord | null>;
+    listAuditLogByTarget(targetType: string, targetId: string): Promise<AdminAuditLogRecord[]>;
   };
 }

@@ -474,3 +474,166 @@ describe("createFakeDatabase requests", () => {
     ).rejects.toThrow(RequestStateConflictError);
   });
 });
+
+describe("createFakeDatabase requests proof and admin review", () => {
+  async function makeAcceptedRequest(db: ReturnType<typeof createFakeDatabase>["db"]): Promise<{ requestId: string }> {
+    const user = await db.identity.findOrCreateUser(`fb-proof-${Math.random()}`, `proof${Math.random()}@x.com`, "seeker");
+    const seekerProfile = await db.identity.createSeekerProfile(user.id, "Proof Seeker");
+    await db.ledger.postTxn({
+      idempotencyKey: `grant:${seekerProfile.id}`,
+      eventType: "credits.grant",
+      entries: [
+        { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -5 },
+        { ownerType: "seeker", ownerId: seekerProfile.id, currency: "credits", amount: 5 },
+      ],
+    });
+    const request = await db.requests.sendRequest({
+      idempotencyKey: `send:${seekerProfile.id}`,
+      seekerProfileId: seekerProfile.id,
+      insiderProfileId: "insider-x",
+      companyId: "company-x",
+      creditCost: 3,
+      rulesVersion: 1,
+    });
+    await db.requests.applyTransition({
+      idempotencyKey: `request:${request.id}:accept`,
+      requestId: request.id,
+      event: "accept",
+      fromState: "SENT",
+      toState: "ACCEPTED",
+      ledgerEntries: [],
+      ledgerEventType: "request.accept",
+    });
+    return { requestId: request.id };
+  }
+
+  it("submitProof moves ACCEPTED to PROOF_PENDING and records the proof", async () => {
+    const { db } = createFakeDatabase();
+    const { requestId } = await makeAcceptedRequest(db);
+
+    const updated = await db.requests.submitProof({
+      idempotencyKey: "proof:1",
+      requestId,
+      fromState: "ACCEPTED",
+      toState: "PROOF_PENDING",
+      proofType: "text",
+      textContent: "Submitted via internal portal",
+    });
+
+    expect(updated.state).toBe("PROOF_PENDING");
+    const proof = await db.requests.getProofByRequestId(requestId);
+    expect(proof?.proofType).toBe("text");
+    expect(proof?.textContent).toBe("Submitted via internal portal");
+  });
+
+  it("submitProof is idempotent: same key does not create a duplicate proof row", async () => {
+    const { db } = createFakeDatabase();
+    const { requestId } = await makeAcceptedRequest(db);
+    const input = {
+      idempotencyKey: "proof:2",
+      requestId,
+      fromState: "ACCEPTED",
+      toState: "PROOF_PENDING",
+      proofType: "text",
+      textContent: "First submission",
+    };
+    await db.requests.submitProof(input);
+    await db.requests.submitProof(input);
+
+    const proof = await db.requests.getProofByRequestId(requestId);
+    expect(proof?.textContent).toBe("First submission");
+  });
+
+  it("submitProof throws RequestStateConflictError when fromState doesn't match", async () => {
+    const { db } = createFakeDatabase();
+    const { requestId } = await makeAcceptedRequest(db);
+    await expect(
+      db.requests.submitProof({
+        idempotencyKey: "proof:3",
+        requestId,
+        fromState: "PROOF_PENDING", // wrong — request is actually ACCEPTED
+        toState: "SUBMITTED",
+        proofType: "text",
+        textContent: "x",
+      })
+    ).rejects.toThrow(RequestStateConflictError);
+  });
+
+  it("listByState returns only requests in the given state", async () => {
+    const { db } = createFakeDatabase();
+    const { requestId } = await makeAcceptedRequest(db);
+    const accepted = await db.requests.listByState("ACCEPTED");
+    expect(accepted.map((r) => r.id)).toContain(requestId);
+    expect(await db.requests.listByState("PROOF_PENDING")).toHaveLength(0);
+  });
+
+  it("getProofByRequestId returns null when no proof exists", async () => {
+    const { db } = createFakeDatabase();
+    const { requestId } = await makeAcceptedRequest(db);
+    expect(await db.requests.getProofByRequestId(requestId)).toBeNull();
+  });
+
+  it("applyTransition writes an admin_audit_log row when adminAudit is provided", async () => {
+    const { db } = createFakeDatabase();
+    const { requestId } = await makeAcceptedRequest(db);
+    await db.requests.submitProof({
+      idempotencyKey: "proof:4",
+      requestId,
+      fromState: "ACCEPTED",
+      toState: "PROOF_PENDING",
+      proofType: "text",
+      textContent: "x",
+    });
+
+    await db.requests.applyTransition({
+      idempotencyKey: "review:1",
+      requestId,
+      event: "verify",
+      fromState: "PROOF_PENDING",
+      toState: "SUBMITTED",
+      ledgerEntries: [],
+      ledgerEventType: "request.verify",
+      adminAudit: {
+        adminUserId: "admin-1",
+        action: "proof.verify",
+        targetType: "insider_request",
+        targetId: requestId,
+      },
+    });
+
+    expect(await db.requests.listByState("SUBMITTED")).toHaveLength(1);
+    const auditRows = await db.requests.listAuditLogByTarget("insider_request", requestId);
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0].action).toBe("proof.verify");
+    expect(auditRows[0].adminUserId).toBe("admin-1");
+  });
+
+  it("applyTransition does not write an admin_audit_log row when adminAudit is omitted", async () => {
+    const { db } = createFakeDatabase();
+    const { requestId } = await makeAcceptedRequest(db);
+    await db.requests.submitProof({
+      idempotencyKey: "proof:5",
+      requestId,
+      fromState: "ACCEPTED",
+      toState: "PROOF_PENDING",
+      proofType: "screenshot",
+      objectKey: "proofs/x.png",
+    });
+    const proof = await db.requests.getProofByRequestId(requestId);
+    expect(proof?.objectKey).toBe("proofs/x.png");
+    expect(proof?.textContent).toBeNull();
+
+    await db.requests.applyTransition({
+      idempotencyKey: "review:2",
+      requestId,
+      event: "verify",
+      fromState: "PROOF_PENDING",
+      toState: "SUBMITTED",
+      ledgerEntries: [],
+      ledgerEventType: "request.verify",
+      // adminAudit deliberately omitted — accept/decline/expire from the prior
+      // plan already call applyTransition this way; confirm it still holds here.
+    });
+    expect(await db.requests.listAuditLogByTarget("insider_request", requestId)).toHaveLength(0);
+  });
+});

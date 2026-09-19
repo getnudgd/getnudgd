@@ -19,6 +19,8 @@ import {
   RequestEventRecord,
   InsufficientBalanceError,
   RequestStateConflictError,
+  VerificationProofRecord,
+  AdminAuditLogRecord,
 } from "./types";
 
 function assertZeroSum(entries: PostLedgerTxnInput["entries"]): void {
@@ -46,6 +48,8 @@ export function createFakeDatabase(): {
   const resumeRows: ResumeRecord[] = [];
   const insiderRequestRows: InsiderRequestRecord[] = [];
   const requestEventRows: RequestEventRecord[] = [];
+  const verificationProofRows: VerificationProofRecord[] = [];
+  const adminAuditLogRows: AdminAuditLogRecord[] = [];
   let nextId = 1;
   const genId = () => `fake-${nextId++}`;
 
@@ -298,6 +302,18 @@ export function createFakeDatabase(): {
           });
         }
 
+        if (input.adminAudit) {
+          adminAuditLogRows.push({
+            id: genId(),
+            adminUserId: input.adminAudit.adminUserId,
+            action: input.adminAudit.action,
+            targetType: input.adminAudit.targetType,
+            targetId: input.adminAudit.targetId,
+            detail: input.adminAudit.detail ?? null,
+            createdAt: new Date(),
+          });
+        }
+
         requestEventRows.push({
           id: genId(),
           requestId: input.requestId,
@@ -310,8 +326,53 @@ export function createFakeDatabase(): {
 
         return current;
       },
+      async submitProof(input) {
+        const existingEvent = requestEventRows.find((e) => e.idempotencyKey === input.idempotencyKey);
+        if (existingEvent) {
+          const existing = insiderRequestRows.find((r) => r.id === input.requestId);
+          if (existing) return existing;
+        }
+
+        const current = insiderRequestRows.find((r) => r.id === input.requestId);
+        if (!current) throw new Error(`Insider request ${input.requestId} not found`);
+        if (current.state !== input.fromState) {
+          throw new RequestStateConflictError(input.requestId, input.fromState, current.state);
+        }
+
+        current.state = input.toState;
+
+        verificationProofRows.push({
+          id: genId(),
+          requestId: input.requestId,
+          proofType: input.proofType,
+          objectKey: input.objectKey ?? null,
+          textContent: input.textContent ?? null,
+          createdAt: new Date(),
+        });
+
+        requestEventRows.push({
+          id: genId(),
+          requestId: input.requestId,
+          idempotencyKey: input.idempotencyKey,
+          event: "proof",
+          fromState: input.fromState,
+          toState: input.toState,
+          createdAt: new Date(),
+        });
+
+        return current;
+      },
       async getById(requestId) {
         return insiderRequestRows.find((r) => r.id === requestId) ?? null;
+      },
+      async listByState(state) {
+        return insiderRequestRows.filter((r) => r.state === state);
+      },
+      async getProofByRequestId(requestId) {
+        return verificationProofRows.find((p) => p.requestId === requestId) ?? null;
+      },
+      async listAuditLogByTarget(targetType, targetId) {
+        return adminAuditLogRows.filter((r) => r.targetType === targetType && r.targetId === targetId);
       },
     },
   };

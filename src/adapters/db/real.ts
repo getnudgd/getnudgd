@@ -14,6 +14,8 @@ import {
   resumes,
   insiderRequests,
   requestEvents,
+  verificationProofs,
+  adminAuditLog,
 } from "../../../drizzle/schema";
 import type {
   Database,
@@ -29,6 +31,8 @@ import type {
   InsiderSearchFilters,
   InsiderSearchResult,
   InsiderRequestRecord,
+  VerificationProofRecord,
+  AdminAuditLogRecord,
 } from "./types";
 import { LedgerImbalanceError, InsufficientBalanceError, RequestStateConflictError } from "./types";
 
@@ -433,6 +437,16 @@ export function createRealDatabase(db: NodePgDatabase): Database {
             }
           }
 
+          if (input.adminAudit) {
+            await tx.insert(adminAuditLog).values({
+              adminUserId: input.adminAudit.adminUserId,
+              action: input.adminAudit.action,
+              targetType: input.adminAudit.targetType,
+              targetId: input.adminAudit.targetId,
+              detail: input.adminAudit.detail,
+            });
+          }
+
           await tx.insert(requestEvents).values({
             requestId: input.requestId,
             idempotencyKey: input.idempotencyKey,
@@ -444,9 +458,69 @@ export function createRealDatabase(db: NodePgDatabase): Database {
           return updated as InsiderRequestRecord;
         });
       },
+      async submitProof(input) {
+        return db.transaction(async (tx) => {
+          const [existingEvent] = await tx
+            .select()
+            .from(requestEvents)
+            .where(eq(requestEvents.idempotencyKey, input.idempotencyKey));
+          if (existingEvent) {
+            const [existing] = await tx.select().from(insiderRequests).where(eq(insiderRequests.id, input.requestId));
+            if (existing) return existing as InsiderRequestRecord;
+          }
+
+          const [current] = await tx
+            .select()
+            .from(insiderRequests)
+            .where(eq(insiderRequests.id, input.requestId))
+            .for("update");
+          if (!current) throw new Error(`Insider request ${input.requestId} not found`);
+          if (current.state !== input.fromState) {
+            throw new RequestStateConflictError(input.requestId, input.fromState, current.state);
+          }
+
+          const [updated] = await tx
+            .update(insiderRequests)
+            .set({ state: input.toState })
+            .where(eq(insiderRequests.id, input.requestId))
+            .returning();
+
+          await tx.insert(verificationProofs).values({
+            requestId: input.requestId,
+            proofType: input.proofType,
+            objectKey: input.objectKey,
+            textContent: input.textContent,
+          });
+
+          await tx.insert(requestEvents).values({
+            requestId: input.requestId,
+            idempotencyKey: input.idempotencyKey,
+            event: "proof",
+            fromState: input.fromState,
+            toState: input.toState,
+          });
+
+          return updated as InsiderRequestRecord;
+        });
+      },
       async getById(requestId) {
         const [row] = await db.select().from(insiderRequests).where(eq(insiderRequests.id, requestId));
         return (row as InsiderRequestRecord) ?? null;
+      },
+      async listByState(state) {
+        const rows = await db.select().from(insiderRequests).where(eq(insiderRequests.state, state));
+        return rows as InsiderRequestRecord[];
+      },
+      async getProofByRequestId(requestId) {
+        const [row] = await db.select().from(verificationProofs).where(eq(verificationProofs.requestId, requestId));
+        return (row as VerificationProofRecord) ?? null;
+      },
+      async listAuditLogByTarget(targetType, targetId) {
+        const rows = await db
+          .select()
+          .from(adminAuditLog)
+          .where(and(eq(adminAuditLog.targetType, targetType), eq(adminAuditLog.targetId, targetId)));
+        return rows as AdminAuditLogRecord[];
       },
     },
   };
