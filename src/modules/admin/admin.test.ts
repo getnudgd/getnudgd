@@ -59,6 +59,11 @@ describe("reviewProof", () => {
       decision: "verify",
     });
     expect(updated.state).toBe("SUBMITTED");
+
+    const auditRows = await deps.db.requests.listAuditLogByTarget("insider_request", requestId);
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0].action).toBe("proof.verify");
+    expect(auditRows[0].adminUserId).toBe("admin-1");
   });
 
   it("reject moves PROOF_PENDING back to ACCEPTED and requires a reason", async () => {
