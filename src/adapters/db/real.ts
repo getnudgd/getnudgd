@@ -1,4 +1,4 @@
-import { eq, and, sum, isNull, gt } from "drizzle-orm";
+import { eq, and, sum, isNull, isNotNull, gt } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
   ledgerAccounts,
@@ -24,6 +24,8 @@ import type {
   SeekerProfileRecord,
   InsiderProfileRecord,
   ResumeRecord,
+  InsiderSearchFilters,
+  InsiderSearchResult,
 } from "./types";
 import { LedgerImbalanceError } from "./types";
 
@@ -233,6 +235,41 @@ export function createRealDatabase(db: NodePgDatabase): Database {
       async listResumesBySeekerProfileId(seekerProfileId) {
         const rows = await db.select().from(resumes).where(eq(resumes.seekerProfileId, seekerProfileId));
         return rows as ResumeRecord[];
+      },
+    },
+    insiders: {
+      async listInsiders(filters) {
+        const conditions = [eq(insiderProfiles.available, true), isNotNull(insiderProfiles.verifiedAt)];
+        if (filters.companyId) conditions.push(eq(insiderProfiles.companyId, filters.companyId));
+
+        const rows = await db
+          .select({
+            insiderProfileId: insiderProfiles.id,
+            companyId: companies.id,
+            companyName: companies.name,
+            companyTier: companies.tier,
+          })
+          .from(insiderProfiles)
+          .innerJoin(companies, eq(insiderProfiles.companyId, companies.id))
+          .where(and(...conditions));
+
+        return rows as InsiderSearchResult[];
+      },
+      async getInsiderById(insiderProfileId) {
+        const [row] = await db
+          .select({
+            insiderProfileId: insiderProfiles.id,
+            companyId: companies.id,
+            companyName: companies.name,
+            companyTier: companies.tier,
+          })
+          .from(insiderProfiles)
+          .innerJoin(companies, eq(insiderProfiles.companyId, companies.id))
+          .where(eq(insiderProfiles.id, insiderProfileId));
+        return (row as InsiderSearchResult) ?? null;
+      },
+      async setAvailability(insiderProfileId, available) {
+        await db.update(insiderProfiles).set({ available }).where(eq(insiderProfiles.id, insiderProfileId));
       },
     },
   };

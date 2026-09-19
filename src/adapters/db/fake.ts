@@ -13,6 +13,8 @@ import {
   SeekerProfileRecord,
   InsiderProfileRecord,
   ResumeRecord,
+  InsiderSearchFilters,
+  InsiderSearchResult,
 } from "./types";
 
 function assertZeroSum(entries: PostLedgerTxnInput["entries"]): void {
@@ -48,6 +50,12 @@ export function createFakeDatabase(): {
       accounts.push(account);
     }
     return account;
+  }
+
+  function toSearchResult(profile: InsiderProfileRecord): InsiderSearchResult | null {
+    const company = companies.find((c) => c.id === profile.companyId);
+    if (!company) return null;
+    return { insiderProfileId: profile.id, companyId: company.id, companyName: company.name, companyTier: company.tier };
   }
 
   const db: Database = {
@@ -164,6 +172,24 @@ export function createFakeDatabase(): {
       },
       async listResumesBySeekerProfileId(seekerProfileId: string) {
         return resumeRows.filter((r) => r.seekerProfileId === seekerProfileId);
+      },
+    },
+    insiders: {
+      async listInsiders(filters: InsiderSearchFilters) {
+        return insiderProfiles
+          .filter((p) => p.verifiedAt !== null && p.available)
+          .filter((p) => !filters.companyId || p.companyId === filters.companyId)
+          .map(toSearchResult)
+          .filter((r): r is InsiderSearchResult => r !== null);
+      },
+      async getInsiderById(insiderProfileId: string) {
+        const profile = insiderProfiles.find((p) => p.id === insiderProfileId);
+        if (!profile) return null;
+        return toSearchResult(profile);
+      },
+      async setAvailability(insiderProfileId: string, available: boolean) {
+        const profile = insiderProfiles.find((p) => p.id === insiderProfileId);
+        if (profile) profile.available = available;
       },
     },
   };

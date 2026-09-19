@@ -201,3 +201,58 @@ describe("createFakeDatabase resumes", () => {
     expect(results.every((r) => r.seekerProfileId === "seeker-1")).toBe(true);
   });
 });
+
+describe("createFakeDatabase insiders", () => {
+  async function makeVerifiedInsider(db: ReturnType<typeof createFakeDatabase>["db"], seedCompany: ReturnType<typeof createFakeDatabase>["seedCompany"], fbUid: string, email: string, companyName: string) {
+    const company = seedCompany({ name: companyName, tier: "tier1" }, [`${companyName.toLowerCase().replace(/\s+/g, "")}.com`]);
+    const user = await db.identity.findOrCreateUser(fbUid, email, "seeker");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, company.id, email);
+    await db.identity.markInsiderVerified(profile.id, new Date());
+    return { company, profile };
+  }
+
+  it("excludes unverified insiders from search results", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const user = await db.identity.findOrCreateUser("fb-unv", "unv@acme.com", "seeker");
+    await db.identity.findOrCreateInsiderProfile(user.id, company.id, "unv@acme.com");
+    expect(await db.insiders.listInsiders({})).toHaveLength(0);
+  });
+
+  it("includes verified, available insiders in search results", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    await makeVerifiedInsider(db, seedCompany, "fb-v1", "v1@acme.com", "Acme");
+    const results = await db.insiders.listInsiders({});
+    expect(results).toHaveLength(1);
+    expect(results[0].companyName).toBe("Acme");
+  });
+
+  it("filters search results by companyId", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    const { company: acme } = await makeVerifiedInsider(db, seedCompany, "fb-v2", "v2@acme.com", "Acme");
+    await makeVerifiedInsider(db, seedCompany, "fb-v3", "v3@beta.com", "Beta");
+    const results = await db.insiders.listInsiders({ companyId: acme.id });
+    expect(results).toHaveLength(1);
+    expect(results[0].companyName).toBe("Acme");
+  });
+
+  it("excludes unavailable insiders from search results", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    const { profile } = await makeVerifiedInsider(db, seedCompany, "fb-v4", "v4@acme.com", "Acme");
+    await db.insiders.setAvailability(profile.id, false);
+    expect(await db.insiders.listInsiders({})).toHaveLength(0);
+  });
+
+  it("getInsiderById returns an unverified insider too (unlike listInsiders)", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const user = await db.identity.findOrCreateUser("fb-gi1", "gi1@acme.com", "seeker");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "gi1@acme.com");
+    expect((await db.insiders.getInsiderById(profile.id))?.insiderProfileId).toBe(profile.id);
+  });
+
+  it("getInsiderById returns null when not found", async () => {
+    const { db } = createFakeDatabase();
+    expect(await db.insiders.getInsiderById("nope")).toBeNull();
+  });
+});

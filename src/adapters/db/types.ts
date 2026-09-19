@@ -92,6 +92,17 @@ export interface ResumeRecord {
   createdAt: Date;
 }
 
+export interface InsiderSearchFilters {
+  companyId?: string;
+}
+
+export interface InsiderSearchResult {
+  insiderProfileId: string;
+  companyId: string;
+  companyName: string;
+  companyTier: string;
+}
+
 export interface Database {
   ledger: {
     postTxn(input: PostLedgerTxnInput): Promise<LedgerTxnRecord>;
@@ -118,5 +129,10 @@ export interface Database {
     registerUpload(seekerProfileId: string, objectKey: string, originalFilename: string): Promise<ResumeRecord>;
     getResumeById(resumeId: string): Promise<ResumeRecord | null>;
     listResumesBySeekerProfileId(seekerProfileId: string): Promise<ResumeRecord[]>;
+  };
+  insiders: {
+    listInsiders(filters: InsiderSearchFilters): Promise<InsiderSearchResult[]>;
+    getInsiderById(insiderProfileId: string): Promise<InsiderSearchResult | null>;
+    setAvailability(insiderProfileId: string, available: boolean): Promise<void>;
   };
 }
