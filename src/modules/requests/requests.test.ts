@@ -116,6 +116,46 @@ describe("decline", () => {
     expect(await deps.db.ledger.getBalance("seeker", seekerProfileId, "credits")).toBe(5);
     expect(await deps.db.ledger.getBalance("escrow", request.id, "credits")).toBe(0);
   });
+
+  it("refunds using the rules_version stamped on the request, not a newer published version", async () => {
+    const { db, seedConfig, seedCompany } = createFakeDatabase();
+    seedConfig({ key: "rules", version: 1, placeholder: true, value: RULES_VALUE });
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const seekerUser = await db.identity.findOrCreateUser("fb-rv-1", "rv1@x.com", "seeker");
+    const seekerProfile = await db.identity.createSeekerProfile(seekerUser.id, "RV Seeker");
+    await db.ledger.postTxn({
+      idempotencyKey: "grant:rv1",
+      eventType: "credits.grant",
+      entries: [
+        { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -5 },
+        { ownerType: "seeker", ownerId: seekerProfile.id, currency: "credits", amount: 5 },
+      ],
+    });
+    const insiderUser = await db.identity.findOrCreateUser("fb-rv-2", "rv2@acme.com", "seeker");
+    const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, "rv2@acme.com");
+    await db.identity.markInsiderVerified(insiderProfile.id, new Date());
+    const deps = { db };
+
+    const request = await sendRequest(deps, {
+      idempotencyKey: "kv1",
+      seekerProfileId: seekerProfile.id,
+      insiderProfileId: insiderProfile.id,
+    });
+    expect(request.rulesVersion).toBe(1);
+
+    // Publish rules v2 with a DIFFERENT refundPercentOnDecline, after the request already exists.
+    seedConfig({
+      key: "rules",
+      version: 2,
+      placeholder: true,
+      value: { ...RULES_VALUE, refundPercentOnDecline: 0 },
+    });
+
+    await decline(deps, request.id);
+
+    // Must still refund at v1's 100%, not v2's 0%.
+    expect(await db.ledger.getBalance("seeker", seekerProfile.id, "credits")).toBe(5);
+  });
 });
 
 describe("expire", () => {
@@ -147,5 +187,45 @@ describe("expire", () => {
     const second = await expire(deps, request.id);
     expect(second.state).toBe(first.state);
     expect(await deps.db.ledger.getBalance("seeker", seekerProfileId, "credits")).toBe(4);
+  });
+
+  it("refunds using the rules_version stamped on the request, not a newer published version", async () => {
+    const { db, seedConfig, seedCompany } = createFakeDatabase();
+    seedConfig({ key: "rules", version: 1, placeholder: true, value: RULES_VALUE });
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const seekerUser = await db.identity.findOrCreateUser("fb-rv-3", "rv3@x.com", "seeker");
+    const seekerProfile = await db.identity.createSeekerProfile(seekerUser.id, "RV Seeker 2");
+    await db.ledger.postTxn({
+      idempotencyKey: "grant:rv2",
+      eventType: "credits.grant",
+      entries: [
+        { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -5 },
+        { ownerType: "seeker", ownerId: seekerProfile.id, currency: "credits", amount: 5 },
+      ],
+    });
+    const insiderUser = await db.identity.findOrCreateUser("fb-rv-4", "rv4@acme.com", "seeker");
+    const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, "rv4@acme.com");
+    await db.identity.markInsiderVerified(insiderProfile.id, new Date());
+    const deps = { db };
+
+    const request = await sendRequest(deps, {
+      idempotencyKey: "kv2",
+      seekerProfileId: seekerProfile.id,
+      insiderProfileId: insiderProfile.id,
+    });
+    expect(request.rulesVersion).toBe(1);
+
+    // RULES_VALUE.refundPercentOnExpiry is 60 in this file's constant — publish v2 with 0%.
+    seedConfig({
+      key: "rules",
+      version: 2,
+      placeholder: true,
+      value: { ...RULES_VALUE, refundPercentOnExpiry: 0 },
+    });
+
+    await expire(deps, request.id);
+
+    // creditCost 3, must still refund at v1's 60% (round(1.8)=2), not v2's 0%.
+    expect(await db.ledger.getBalance("seeker", seekerProfile.id, "credits")).toBe(4);
   });
 });

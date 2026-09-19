@@ -1,7 +1,7 @@
 import type { Database, InsiderRequestRecord, PostLedgerEntryInput } from "../../adapters/db/types";
 import { RequestStateConflictError } from "../../adapters/db/types";
 import { getRulesWithVersion } from "../config/config";
-import { getInsider } from "../insiders/insiders";
+import { UnknownCompanyTierError } from "../insiders/insiders";
 import { escrowFor, platformAccount } from "../ledger/ledger";
 import { nextState, type RequestState } from "./state";
 
@@ -28,17 +28,19 @@ export async function sendRequest(deps: RequestsDeps, input: SendRequestInput): 
     throw new InsiderUnavailableError(input.insiderProfileId);
   }
 
-  const summary = await getInsider(deps, input.insiderProfileId);
+  const summary = await deps.db.insiders.getInsiderById(input.insiderProfileId);
   if (!summary) throw new InsiderUnavailableError(input.insiderProfileId);
 
-  const { version: rulesVersion } = await getRulesWithVersion(deps);
+  const { rules, version: rulesVersion } = await getRulesWithVersion(deps);
+  const creditCost = rules.requestCostByTier[summary.companyTier];
+  if (creditCost === undefined) throw new UnknownCompanyTierError(summary.companyTier);
 
   return deps.db.requests.sendRequest({
-    idempotencyKey: input.idempotencyKey,
+    idempotencyKey: `send:${input.idempotencyKey}`,
     seekerProfileId: input.seekerProfileId,
     insiderProfileId: input.insiderProfileId,
     companyId: profile.companyId,
-    creditCost: summary.creditCost,
+    creditCost,
     rulesVersion,
   });
 }
@@ -83,7 +85,7 @@ export async function decline(deps: RequestsDeps, requestId: string): Promise<In
   const record = await deps.db.requests.getById(requestId);
   if (!record) throw new Error(`Insider request ${requestId} not found`);
   const toState = nextState(record.state as RequestState, "decline");
-  const { rules } = await getRulesWithVersion(deps);
+  const { rules } = await getRulesWithVersion(deps, record.rulesVersion);
   const entries = refundEntries(requestId, record.seekerProfileId, record.creditCost, rules.refundPercentOnDecline);
 
   return deps.db.requests.applyTransition({
@@ -103,7 +105,7 @@ export async function expire(deps: RequestsDeps, requestId: string): Promise<Ins
   if (record.state !== "SENT") return record;
 
   const toState = nextState(record.state as RequestState, "expire");
-  const { rules } = await getRulesWithVersion(deps);
+  const { rules } = await getRulesWithVersion(deps, record.rulesVersion);
   const entries = refundEntries(requestId, record.seekerProfileId, record.creditCost, rules.refundPercentOnExpiry);
 
   try {

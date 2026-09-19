@@ -284,6 +284,13 @@ export function createRealDatabase(db: NodePgDatabase): Database {
         await db.update(insiderProfiles).set({ available }).where(eq(insiderProfiles.id, insiderProfileId));
       },
     },
+    // NOTE: applyTransition's race handling (a losing SELECT...FOR UPDATE re-reading the
+    // winner's committed state and throwing RequestStateConflictError cleanly) depends on
+    // READ COMMITTED isolation. If the connection pool this Database is constructed with is
+    // ever configured for REPEATABLE READ or SERIALIZABLE, the identical race instead raises
+    // a raw Postgres serialization-failure error that this code does not catch or retry —
+    // whoever wires the real connection pool must either pin READ COMMITTED or add a
+    // serialization-failure retry wrapper around these transactions.
     requests: {
       async sendRequest(input) {
         return db.transaction(async (tx) => {
@@ -386,6 +393,10 @@ export function createRealDatabase(db: NodePgDatabase): Database {
             throw new RequestStateConflictError(input.requestId, input.fromState, current.state);
           }
 
+          if (input.ledgerEntries.length > 0) {
+            assertZeroSum(input.ledgerEntries);
+          }
+
           const [updated] = await tx
             .update(insiderRequests)
             .set({ state: input.toState })
@@ -393,8 +404,6 @@ export function createRealDatabase(db: NodePgDatabase): Database {
             .returning();
 
           if (input.ledgerEntries.length > 0) {
-            assertZeroSum(input.ledgerEntries);
-
             const [txnRow] = await tx
               .insert(ledgerTxns)
               .values({ idempotencyKey: `${input.idempotencyKey}:ledger`, eventType: input.ledgerEventType })
