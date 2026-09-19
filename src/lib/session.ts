@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
-import { getEnv, type Env } from "../config/env";
+import { getEnv } from "../config/env";
 import type { Role } from "../adapters/db/types";
 
 export interface SessionPayload {
@@ -30,28 +30,21 @@ export function decodeSession(token: string, secret: string): SessionPayload | n
   const expectedBuf = Buffer.from(expected);
   if (actual.length !== expectedBuf.length || !timingSafeEqual(actual, expectedBuf)) return null;
 
+  let payload: SessionPayload;
   try {
-    return JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as SessionPayload;
+    payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as SessionPayload;
   } catch {
     return null;
   }
-}
 
-/**
- * SESSION_COOKIE_SECRET is still `.optional()` in env.ts as of Task 5 (Task 7 makes it
- * required). Narrow it here rather than widening SessionPayload's signature helpers to
- * accept `string | undefined`, and fail fast if a caller reaches this before Task 7 lands.
- */
-function requireSessionSecret(env: Env): string {
-  if (!env.SESSION_COOKIE_SECRET) {
-    throw new Error("SESSION_COOKIE_SECRET is not configured");
-  }
-  return env.SESSION_COOKIE_SECRET;
+  if (Date.now() - payload.issuedAt > SESSION_MAX_AGE_SECONDS * 1000) return null;
+
+  return payload;
 }
 
 export async function setSessionCookie(payload: SessionPayload): Promise<void> {
   const env = getEnv();
-  const token = encodeSession(payload, requireSessionSecret(env));
+  const token = encodeSession(payload, env.SESSION_COOKIE_SECRET);
   const store = await cookies();
   store.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
@@ -67,7 +60,7 @@ export async function getSessionFromCookies(): Promise<SessionPayload | null> {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE_NAME)?.value;
   if (!token) return null;
-  return decodeSession(token, requireSessionSecret(env));
+  return decodeSession(token, env.SESSION_COOKIE_SECRET);
 }
 
 export async function clearSessionCookie(): Promise<void> {

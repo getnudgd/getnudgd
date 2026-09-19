@@ -31,4 +31,16 @@ describe("encodeSession / decodeSession", () => {
   it("rejects an empty token", () => {
     expect(decodeSession("", SECRET)).toBeNull();
   });
+
+  it("rejects a session older than the max age", () => {
+    const payload: SessionPayload = { userId: "u1", role: "seeker", issuedAt: Date.now() - (31 * 24 * 60 * 60 * 1000) };
+    const token = encodeSession(payload, SECRET);
+    expect(decodeSession(token, SECRET)).toBeNull();
+  });
+
+  it("accepts a session within the max age", () => {
+    const payload: SessionPayload = { userId: "u1", role: "seeker", issuedAt: Date.now() - 1000 };
+    const token = encodeSession(payload, SECRET);
+    expect(decodeSession(token, SECRET)).toEqual(payload);
+  });
 });
