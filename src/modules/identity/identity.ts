@@ -52,7 +52,7 @@ export async function startWorkEmailOtp(
   const company = await deps.db.identity.findCompanyByDomain(domain);
   if (!company) throw new WorkEmailDomainError(domain);
 
-  const profile = await deps.db.identity.createInsiderProfile(userId, company.id, workEmail);
+  const profile = await deps.db.identity.findOrCreateInsiderProfile(userId, company.id, workEmail);
   const code = generateOtpCode();
   await deps.db.identity.storeWorkEmailOtp(profile.id, hashOtpCode(code), new Date(Date.now() + OTP_TTL_MS));
   return { insiderProfileId: profile.id, code };

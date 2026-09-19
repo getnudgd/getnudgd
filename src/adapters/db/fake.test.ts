@@ -96,7 +96,7 @@ describe("createFakeDatabase identity", () => {
     const { db, seedCompany } = createFakeDatabase();
     const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
     const user = await db.identity.findOrCreateUser("fb-3", "i@acme.com", "insider");
-    const profile = await db.identity.createInsiderProfile(user.id, company.id, "i@acme.com");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "i@acme.com");
     expect(profile.verifiedAt).toBeNull();
     expect(profile.available).toBe(true);
   });
@@ -105,7 +105,7 @@ describe("createFakeDatabase identity", () => {
     const { db, seedCompany } = createFakeDatabase();
     const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
     const user = await db.identity.findOrCreateUser("fb-4", "i2@acme.com", "insider");
-    const profile = await db.identity.createInsiderProfile(user.id, company.id, "i2@acme.com");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "i2@acme.com");
     const when = new Date();
     await db.identity.markInsiderVerified(profile.id, when);
     expect(profile.verifiedAt).toEqual(when);
@@ -115,7 +115,7 @@ describe("createFakeDatabase identity", () => {
     const { db, seedCompany } = createFakeDatabase();
     const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
     const user = await db.identity.findOrCreateUser("fb-5", "i3@acme.com", "insider");
-    const profile = await db.identity.createInsiderProfile(user.id, company.id, "i3@acme.com");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "i3@acme.com");
     await db.identity.storeWorkEmailOtp(profile.id, "hash-1", new Date(Date.now() + 60_000));
     expect(await db.identity.consumeWorkEmailOtp(profile.id, "hash-1", new Date())).toBe(true);
     expect(await db.identity.consumeWorkEmailOtp(profile.id, "hash-1", new Date())).toBe(false);
@@ -125,7 +125,7 @@ describe("createFakeDatabase identity", () => {
     const { db, seedCompany } = createFakeDatabase();
     const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
     const user = await db.identity.findOrCreateUser("fb-6", "i4@acme.com", "insider");
-    const profile = await db.identity.createInsiderProfile(user.id, company.id, "i4@acme.com");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "i4@acme.com");
     await db.identity.storeWorkEmailOtp(profile.id, "hash-2", new Date(Date.now() - 1000));
     expect(await db.identity.consumeWorkEmailOtp(profile.id, "hash-2", new Date())).toBe(false);
   });
@@ -134,8 +134,17 @@ describe("createFakeDatabase identity", () => {
     const { db, seedCompany } = createFakeDatabase();
     const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
     const user = await db.identity.findOrCreateUser("fb-7", "i5@acme.com", "insider");
-    const profile = await db.identity.createInsiderProfile(user.id, company.id, "i5@acme.com");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "i5@acme.com");
     await db.identity.storeWorkEmailOtp(profile.id, "hash-correct", new Date(Date.now() + 60_000));
     expect(await db.identity.consumeWorkEmailOtp(profile.id, "hash-wrong", new Date())).toBe(false);
+  });
+
+  it("returns the existing profile when called again for the same user (idempotent)", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const user = await db.identity.findOrCreateUser("fb-idem", "idem@acme.com", "seeker");
+    const first = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "idem@acme.com");
+    const second = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "idem@acme.com");
+    expect(second.id).toBe(first.id);
   });
 });

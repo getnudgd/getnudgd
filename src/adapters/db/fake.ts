@@ -110,15 +110,11 @@ export function createFakeDatabase(): {
         seekerProfiles.push(profile);
         return profile;
       },
-      async createInsiderProfile(userId: string, companyId: string, workEmail: string) {
+      async findOrCreateInsiderProfile(userId: string, companyId: string, workEmail: string) {
+        const existing = insiderProfiles.find((p) => p.userId === userId);
+        if (existing) return existing;
         const profile: InsiderProfileRecord = {
-          id: genId(),
-          userId,
-          companyId,
-          workEmail,
-          verifiedAt: null,
-          available: true,
-          weeklyLimit: 3,
+          id: genId(), userId, companyId, workEmail, verifiedAt: null, available: true, weeklyLimit: 3,
         };
         insiderProfiles.push(profile);
         return profile;

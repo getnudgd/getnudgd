@@ -97,7 +97,7 @@ export interface Database {
     findOrCreateUser(firebaseUid: string, email: string, role: Role): Promise<UserRecord>;
     getUserById(userId: string): Promise<UserRecord | null>;
     createSeekerProfile(userId: string, fullName: string): Promise<SeekerProfileRecord>;
-    createInsiderProfile(userId: string, companyId: string, workEmail: string): Promise<InsiderProfileRecord>;
+    findOrCreateInsiderProfile(userId: string, companyId: string, workEmail: string): Promise<InsiderProfileRecord>;
     findCompanyByDomain(domain: string): Promise<CompanyRecord | null>;
     markInsiderVerified(insiderProfileId: string, verifiedAt: Date): Promise<void>;
     storeWorkEmailOtp(insiderProfileId: string, codeHash: string, expiresAt: Date): Promise<void>;
