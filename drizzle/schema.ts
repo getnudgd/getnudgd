@@ -63,3 +63,77 @@ export const ledgerEntries = pgTable(
     currencyCheck: check("ledger_entries_currency_check", sql`${table.currency} in ('credits','points')`),
   })
 );
+
+export const users = pgTable(
+  "users",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    firebaseUid: text("firebase_uid").notNull(),
+    email: text("email").notNull(),
+    role: text("role").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    firebaseUidIdx: uniqueIndex("users_firebase_uid_idx").on(table.firebaseUid),
+    emailIdx: uniqueIndex("users_email_idx").on(table.email),
+    roleCheck: check("users_role_check", sql`${table.role} in ('seeker','insider','admin','both')`),
+  })
+);
+
+export const seekerProfiles = pgTable(
+  "seeker_profiles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id),
+    fullName: text("full_name").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: uniqueIndex("seeker_profiles_user_id_idx").on(table.userId),
+  })
+);
+
+export const companies = pgTable("companies", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  tier: text("tier").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const companyDomains = pgTable(
+  "company_domains",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    domain: text("domain").notNull(),
+  },
+  (table) => ({
+    domainIdx: uniqueIndex("company_domains_domain_idx").on(table.domain),
+  })
+);
+
+export const insiderProfiles = pgTable(
+  "insider_profiles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    workEmail: text("work_email").notNull(),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    available: boolean("available").notNull().default(true),
+    weeklyLimit: integer("weekly_limit").notNull().default(3),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: uniqueIndex("insider_profiles_user_id_idx").on(table.userId),
+  })
+);
+
+export const workEmailOtps = pgTable("work_email_otps", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  insiderProfileId: uuid("insider_profile_id").notNull().references(() => insiderProfiles.id),
+  codeHash: text("code_hash").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
