@@ -7,6 +7,11 @@ import {
   PostLedgerTxnInput,
   LedgerImbalanceError,
   AppConfigRecord,
+  Role,
+  UserRecord,
+  CompanyRecord,
+  SeekerProfileRecord,
+  InsiderProfileRecord,
 } from "./types";
 
 function assertZeroSum(entries: PostLedgerTxnInput["entries"]): void {
@@ -17,10 +22,20 @@ function assertZeroSum(entries: PostLedgerTxnInput["entries"]): void {
   }
 }
 
-export function createFakeDatabase(): { db: Database; seedConfig: (row: AppConfigRecord) => void } {
+export function createFakeDatabase(): {
+  db: Database;
+  seedConfig: (row: AppConfigRecord) => void;
+  seedCompany: (input: { name: string; tier: string }, domains: string[]) => CompanyRecord;
+} {
   const accounts: LedgerAccountRecord[] = [];
   const txns: LedgerTxnRecord[] = [];
   const configRows: AppConfigRecord[] = [];
+  const users: UserRecord[] = [];
+  const seekerProfiles: SeekerProfileRecord[] = [];
+  const insiderProfiles: InsiderProfileRecord[] = [];
+  const companies: CompanyRecord[] = [];
+  const companyDomainToId = new Map<string, string>();
+  const otps: { insiderProfileId: string; codeHash: string; expiresAt: Date; consumedAt: Date | null }[] = [];
   let nextId = 1;
   const genId = () => `fake-${nextId++}`;
 
@@ -78,7 +93,67 @@ export function createFakeDatabase(): { db: Database; seedConfig: (row: AppConfi
         return configRows.find((r) => r.key === key && r.version === version) ?? null;
       },
     },
+    identity: {
+      async findOrCreateUser(firebaseUid: string, email: string, role: Role) {
+        let user = users.find((u) => u.firebaseUid === firebaseUid);
+        if (!user) {
+          user = { id: genId(), firebaseUid, email, role, createdAt: new Date() };
+          users.push(user);
+        }
+        return user;
+      },
+      async getUserById(userId: string) {
+        return users.find((u) => u.id === userId) ?? null;
+      },
+      async createSeekerProfile(userId: string, fullName: string) {
+        const profile: SeekerProfileRecord = { id: genId(), userId, fullName };
+        seekerProfiles.push(profile);
+        return profile;
+      },
+      async createInsiderProfile(userId: string, companyId: string, workEmail: string) {
+        const profile: InsiderProfileRecord = {
+          id: genId(),
+          userId,
+          companyId,
+          workEmail,
+          verifiedAt: null,
+          available: true,
+          weeklyLimit: 3,
+        };
+        insiderProfiles.push(profile);
+        return profile;
+      },
+      async findCompanyByDomain(domain: string) {
+        const companyId = companyDomainToId.get(domain);
+        if (!companyId) return null;
+        return companies.find((c) => c.id === companyId) ?? null;
+      },
+      async markInsiderVerified(insiderProfileId: string, verifiedAt: Date) {
+        const profile = insiderProfiles.find((p) => p.id === insiderProfileId);
+        if (profile) profile.verifiedAt = verifiedAt;
+      },
+      async storeWorkEmailOtp(insiderProfileId: string, codeHash: string, expiresAt: Date) {
+        otps.push({ insiderProfileId, codeHash, expiresAt, consumedAt: null });
+      },
+      async consumeWorkEmailOtp(insiderProfileId: string, codeHash: string, now: Date) {
+        const otp = otps.find(
+          (o) => o.insiderProfileId === insiderProfileId && o.codeHash === codeHash && !o.consumedAt && o.expiresAt > now
+        );
+        if (!otp) return false;
+        otp.consumedAt = now;
+        return true;
+      },
+    },
   };
 
-  return { db, seedConfig: (row: AppConfigRecord) => configRows.push(row) };
+  return {
+    db,
+    seedConfig: (row: AppConfigRecord) => configRows.push(row),
+    seedCompany: (input: { name: string; tier: string }, domains: string[]): CompanyRecord => {
+      const company: CompanyRecord = { id: genId(), name: input.name, tier: input.tier };
+      companies.push(company);
+      for (const domain of domains) companyDomainToId.set(domain, company.id);
+      return company;
+    },
+  };
 }

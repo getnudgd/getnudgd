@@ -51,6 +51,38 @@ export interface AppConfigRecord {
   placeholder: boolean;
 }
 
+export type Role = "seeker" | "insider" | "admin" | "both";
+
+export interface UserRecord {
+  id: string;
+  firebaseUid: string;
+  email: string;
+  role: Role;
+  createdAt: Date;
+}
+
+export interface CompanyRecord {
+  id: string;
+  name: string;
+  tier: string;
+}
+
+export interface SeekerProfileRecord {
+  id: string;
+  userId: string;
+  fullName: string;
+}
+
+export interface InsiderProfileRecord {
+  id: string;
+  userId: string;
+  companyId: string;
+  workEmail: string;
+  verifiedAt: Date | null;
+  available: boolean;
+  weeklyLimit: number;
+}
+
 export interface Database {
   ledger: {
     postTxn(input: PostLedgerTxnInput): Promise<LedgerTxnRecord>;
@@ -60,5 +92,15 @@ export interface Database {
   config: {
     getLatest(key: string): Promise<AppConfigRecord | null>;
     getVersion(key: string, version: number): Promise<AppConfigRecord | null>;
+  };
+  identity: {
+    findOrCreateUser(firebaseUid: string, email: string, role: Role): Promise<UserRecord>;
+    getUserById(userId: string): Promise<UserRecord | null>;
+    createSeekerProfile(userId: string, fullName: string): Promise<SeekerProfileRecord>;
+    createInsiderProfile(userId: string, companyId: string, workEmail: string): Promise<InsiderProfileRecord>;
+    findCompanyByDomain(domain: string): Promise<CompanyRecord | null>;
+    markInsiderVerified(insiderProfileId: string, verifiedAt: Date): Promise<void>;
+    storeWorkEmailOtp(insiderProfileId: string, codeHash: string, expiresAt: Date): Promise<void>;
+    consumeWorkEmailOtp(insiderProfileId: string, codeHash: string, now: Date): Promise<boolean>;
   };
 }

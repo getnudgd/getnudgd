@@ -1,7 +1,28 @@
-import { eq, and, sum } from "drizzle-orm";
+import { eq, and, sum, isNull, gt } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { ledgerAccounts, ledgerTxns, ledgerEntries, appConfig } from "../../../drizzle/schema";
-import type { Database, LedgerAccountRecord, LedgerCurrency, LedgerOwnerType, PostLedgerTxnInput } from "./types";
+import {
+  ledgerAccounts,
+  ledgerTxns,
+  ledgerEntries,
+  appConfig,
+  users,
+  seekerProfiles,
+  insiderProfiles,
+  companies,
+  companyDomains,
+  workEmailOtps,
+} from "../../../drizzle/schema";
+import type {
+  Database,
+  LedgerAccountRecord,
+  LedgerCurrency,
+  LedgerOwnerType,
+  PostLedgerTxnInput,
+  UserRecord,
+  CompanyRecord,
+  SeekerProfileRecord,
+  InsiderProfileRecord,
+} from "./types";
 import { LedgerImbalanceError } from "./types";
 
 function toLedgerAccountRecord(row: {
@@ -132,6 +153,56 @@ export function createRealDatabase(db: NodePgDatabase): Database {
       async getVersion(key, version) {
         const [row] = await db.select().from(appConfig).where(and(eq(appConfig.key, key), eq(appConfig.version, version)));
         return row ?? null;
+      },
+    },
+    identity: {
+      async findOrCreateUser(firebaseUid, email, role) {
+        const [existing] = await db.select().from(users).where(eq(users.firebaseUid, firebaseUid));
+        if (existing) return existing as UserRecord;
+        const [created] = await db.insert(users).values({ firebaseUid, email, role }).returning();
+        return created as UserRecord;
+      },
+      async getUserById(userId) {
+        const [row] = await db.select().from(users).where(eq(users.id, userId));
+        return (row as UserRecord) ?? null;
+      },
+      async createSeekerProfile(userId, fullName) {
+        const [row] = await db.insert(seekerProfiles).values({ userId, fullName }).returning();
+        return row as SeekerProfileRecord;
+      },
+      async createInsiderProfile(userId, companyId, workEmail) {
+        const [row] = await db.insert(insiderProfiles).values({ userId, companyId, workEmail }).returning();
+        return row as InsiderProfileRecord;
+      },
+      async findCompanyByDomain(domain) {
+        const [row] = await db
+          .select({ id: companies.id, name: companies.name, tier: companies.tier })
+          .from(companyDomains)
+          .innerJoin(companies, eq(companyDomains.companyId, companies.id))
+          .where(eq(companyDomains.domain, domain));
+        return row ? (row as CompanyRecord) : null;
+      },
+      async markInsiderVerified(insiderProfileId, verifiedAt) {
+        await db.update(insiderProfiles).set({ verifiedAt }).where(eq(insiderProfiles.id, insiderProfileId));
+      },
+      async storeWorkEmailOtp(insiderProfileId, codeHash, expiresAt) {
+        await db.insert(workEmailOtps).values({ insiderProfileId, codeHash, expiresAt });
+      },
+      async consumeWorkEmailOtp(insiderProfileId, codeHash, now) {
+        const [otp] = await db
+          .select()
+          .from(workEmailOtps)
+          .where(
+            and(
+              eq(workEmailOtps.insiderProfileId, insiderProfileId),
+              eq(workEmailOtps.codeHash, codeHash),
+              isNull(workEmailOtps.consumedAt),
+              gt(workEmailOtps.expiresAt, now)
+            )
+          );
+        if (!otp) return false;
+        await db.update(workEmailOtps).set({ consumedAt: now }).where(eq(workEmailOtps.id, otp.id));
+        return true;
       },
     },
   };
