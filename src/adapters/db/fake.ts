@@ -278,10 +278,12 @@ export function createFakeDatabase(): {
           throw new RequestStateConflictError(input.requestId, input.fromState, current.state);
         }
 
+        if (input.ledgerEntries.length > 0) {
+          assertZeroSum(input.ledgerEntries);
+        }
         current.state = input.toState;
 
         if (input.ledgerEntries.length > 0) {
-          assertZeroSum(input.ledgerEntries);
           const txnId = genId();
           const entries = input.ledgerEntries.map((e) => {
             const account = findOrCreateAccount(e.ownerType, e.ownerId, e.currency);

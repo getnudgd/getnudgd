@@ -393,6 +393,8 @@ export function createRealDatabase(db: NodePgDatabase): Database {
             .returning();
 
           if (input.ledgerEntries.length > 0) {
+            assertZeroSum(input.ledgerEntries);
+
             const [txnRow] = await tx
               .insert(ledgerTxns)
               .values({ idempotencyKey: `${input.idempotencyKey}:ledger`, eventType: input.ledgerEventType })
