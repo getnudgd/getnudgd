@@ -137,3 +137,18 @@ export const workEmailOtps = pgTable("work_email_otps", {
   consumedAt: timestamp("consumed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const resumes = pgTable(
+  "resumes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    seekerProfileId: uuid("seeker_profile_id").notNull().references(() => seekerProfiles.id),
+    objectKey: text("object_key").notNull(),
+    originalFilename: text("original_filename").notNull(),
+    status: text("status").notNull().default("uploaded"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    statusCheck: check("resumes_status_check", sql`${table.status} in ('uploaded','parsed','tailored')`),
+  })
+);
