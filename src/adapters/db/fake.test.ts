@@ -169,6 +169,23 @@ describe("createFakeDatabase identity", () => {
     const { db } = createFakeDatabase();
     await expect(db.identity.setUserRole("nope", "both")).rejects.toThrow();
   });
+
+  it("updates an insider profile's company and work email", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    const acme = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const beta = seedCompany({ name: "Beta", tier: "tier2" }, ["beta.com"]);
+    const user = await db.identity.findOrCreateUser("fb-upd-1", "upd1@acme.com", "seeker");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, acme.id, "upd1@acme.com");
+    const updated = await db.identity.updateInsiderProfileCompany(profile.id, beta.id, "upd1@beta.com");
+    expect(updated.companyId).toBe(beta.id);
+    expect(updated.workEmail).toBe("upd1@beta.com");
+  });
+
+  it("throws when updating a nonexistent insider profile's company", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    const beta = seedCompany({ name: "Beta", tier: "tier2" }, ["beta.com"]);
+    await expect(db.identity.updateInsiderProfileCompany("nope", beta.id, "x@beta.com")).rejects.toThrow();
+  });
 });
 
 describe("createFakeDatabase resumes", () => {

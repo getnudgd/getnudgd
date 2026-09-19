@@ -180,6 +180,15 @@ export function createRealDatabase(db: NodePgDatabase): Database {
         const [created] = await db.insert(insiderProfiles).values({ userId, companyId, workEmail }).returning();
         return created as InsiderProfileRecord;
       },
+      async updateInsiderProfileCompany(insiderProfileId, companyId, workEmail) {
+        const [row] = await db
+          .update(insiderProfiles)
+          .set({ companyId, workEmail })
+          .where(eq(insiderProfiles.id, insiderProfileId))
+          .returning();
+        if (!row) throw new Error(`Insider profile ${insiderProfileId} not found`);
+        return row as InsiderProfileRecord;
+      },
       async findCompanyByDomain(domain) {
         const [row] = await db
           .select({ id: companies.id, name: companies.name, tier: companies.tier })

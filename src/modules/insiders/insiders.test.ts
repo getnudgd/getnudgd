@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
-import { listInsiders, getInsider, setAvailability, type InsidersDeps } from "./insiders";
+import { listInsiders, getInsider, setAvailability, UnknownCompanyTierError, type InsidersDeps } from "./insiders";
 
 const RULES = {
   key: "rules",
@@ -72,5 +72,18 @@ describe("setAvailability", () => {
     const { deps, insiderProfileId } = await makeDepsWithVerifiedInsider();
     await setAvailability(deps, insiderProfileId, false);
     expect(await listInsiders(deps)).toHaveLength(0);
+  });
+});
+
+describe("toSummary unknown tier handling", () => {
+  it("throws UnknownCompanyTierError when a company's tier has no configured cost", async () => {
+    const { db, seedConfig, seedCompany } = createFakeDatabase();
+    seedConfig(RULES);
+    const company = seedCompany({ name: "Gamma", tier: "tier4" }, ["gamma.com"]);
+    const user = await db.identity.findOrCreateUser("fb-tier-1", "tier1@gamma.com", "seeker");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "tier1@gamma.com");
+    await db.identity.markInsiderVerified(profile.id, new Date());
+
+    await expect(listInsiders({ db })).rejects.toThrow(UnknownCompanyTierError);
   });
 });

@@ -13,12 +13,23 @@ export interface InsiderSummary {
   creditCost: number;
 }
 
+export class UnknownCompanyTierError extends Error {
+  constructor(tier: string) {
+    super(`No requestCostByTier entry configured for company tier "${tier}"`);
+    this.name = "UnknownCompanyTierError";
+  }
+}
+
 function toSummary(result: InsiderSearchResult, rules: Rules): InsiderSummary {
+  const creditCost = rules.requestCostByTier[result.companyTier];
+  if (creditCost === undefined) {
+    throw new UnknownCompanyTierError(result.companyTier);
+  }
   return {
     insiderProfileId: result.insiderProfileId,
     companyName: result.companyName,
     companyTier: result.companyTier,
-    creditCost: rules.requestCostByTier[result.companyTier] ?? 0,
+    creditCost,
   };
 }
 

@@ -25,6 +25,13 @@ export class WorkEmailDomainError extends Error {
   }
 }
 
+export class InsiderCompanyChangeError extends Error {
+  constructor() {
+    super("Cannot change employer for an already-verified Insider through this flow");
+    this.name = "InsiderCompanyChangeError";
+  }
+}
+
 export function promoteRoleForInsiderVerification(currentRole: Role): Role {
   if (currentRole === "seeker") return "both";
   return currentRole;
@@ -57,7 +64,14 @@ export async function startWorkEmailOtp(
   const company = await deps.db.identity.findCompanyByDomain(domain);
   if (!company) throw new WorkEmailDomainError(domain);
 
-  const profile = await deps.db.identity.findOrCreateInsiderProfile(userId, company.id, workEmail);
+  let profile = await deps.db.identity.findOrCreateInsiderProfile(userId, company.id, workEmail);
+  if (profile.companyId !== company.id || profile.workEmail !== workEmail) {
+    if (profile.verifiedAt !== null) {
+      throw new InsiderCompanyChangeError();
+    }
+    profile = await deps.db.identity.updateInsiderProfileCompany(profile.id, company.id, workEmail);
+  }
+
   const code = generateOtpCode();
   await deps.db.identity.storeWorkEmailOtp(profile.id, hashOtpCode(code), new Date(Date.now() + OTP_TTL_MS));
   return { insiderProfileId: profile.id, code };

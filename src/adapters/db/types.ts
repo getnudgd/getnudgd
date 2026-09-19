@@ -118,6 +118,7 @@ export interface Database {
     getUserById(userId: string): Promise<UserRecord | null>;
     createSeekerProfile(userId: string, fullName: string): Promise<SeekerProfileRecord>;
     findOrCreateInsiderProfile(userId: string, companyId: string, workEmail: string): Promise<InsiderProfileRecord>;
+    updateInsiderProfileCompany(insiderProfileId: string, companyId: string, workEmail: string): Promise<InsiderProfileRecord>;
     findCompanyByDomain(domain: string): Promise<CompanyRecord | null>;
     markInsiderVerified(insiderProfileId: string, verifiedAt: Date): Promise<void>;
     storeWorkEmailOtp(insiderProfileId: string, codeHash: string, expiresAt: Date): Promise<void>;

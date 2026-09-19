@@ -129,6 +129,13 @@ export function createFakeDatabase(): {
         insiderProfiles.push(profile);
         return profile;
       },
+      async updateInsiderProfileCompany(insiderProfileId: string, companyId: string, workEmail: string) {
+        const profile = insiderProfiles.find((p) => p.id === insiderProfileId);
+        if (!profile) throw new Error(`Insider profile ${insiderProfileId} not found`);
+        profile.companyId = companyId;
+        profile.workEmail = workEmail;
+        return profile;
+      },
       async findCompanyByDomain(domain: string) {
         const companyId = companyDomainToId.get(domain);
         if (!companyId) return null;

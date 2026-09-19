@@ -7,6 +7,7 @@ import {
   verifyWorkEmailOtp,
   promoteRoleForInsiderVerification,
   WorkEmailDomainError,
+  InsiderCompanyChangeError,
   type IdentityDeps,
 } from "./identity";
 
@@ -151,5 +152,52 @@ describe("verifyWorkEmailOtp role promotion", () => {
 
     const user = await deps.db.identity.getUserById(adminUser.id);
     expect(user?.role).toBe("admin");
+  });
+});
+
+describe("startWorkEmailOtp company-change handling", () => {
+  it("updates an unverified profile's company when called again with a different company", async () => {
+    const { deps, issueToken, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const beta = seedCompany({ name: "Beta", tier: "tier2" }, ["beta.com"]);
+    const token = issueToken({ providerUid: "fb-cc-1", email: "cc1@example.com" });
+    const session = await signInWithFirebaseToken(deps, token);
+
+    const first = await startWorkEmailOtp(deps, session.userId, "person@acme.com");
+    const second = await startWorkEmailOtp(deps, session.userId, "person@beta.com");
+
+    expect(second.insiderProfileId).toBe(first.insiderProfileId);
+    const profile = await deps.db.identity.getInsiderProfileById(second.insiderProfileId);
+    expect(profile?.companyId).toBe(beta.id);
+    expect(profile?.workEmail).toBe("person@beta.com");
+  });
+
+  it("verifies against the updated company after a company change", async () => {
+    const { deps, issueToken, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const beta = seedCompany({ name: "Beta", tier: "tier2" }, ["beta.com"]);
+    const token = issueToken({ providerUid: "fb-cc-2", email: "cc2@example.com" });
+    const session = await signInWithFirebaseToken(deps, token);
+
+    await startWorkEmailOtp(deps, session.userId, "person@acme.com");
+    const { insiderProfileId, code } = await startWorkEmailOtp(deps, session.userId, "person@beta.com");
+    await verifyWorkEmailOtp(deps, insiderProfileId, code);
+
+    const profile = await deps.db.identity.getInsiderProfileById(insiderProfileId);
+    expect(profile?.companyId).toBe(beta.id);
+    expect(profile?.verifiedAt).not.toBeNull();
+  });
+
+  it("throws when trying to change company for an already-verified insider", async () => {
+    const { deps, issueToken, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    seedCompany({ name: "Beta", tier: "tier2" }, ["beta.com"]);
+    const token = issueToken({ providerUid: "fb-cc-3", email: "cc3@example.com" });
+    const session = await signInWithFirebaseToken(deps, token);
+
+    const { insiderProfileId, code } = await startWorkEmailOtp(deps, session.userId, "person@acme.com");
+    await verifyWorkEmailOtp(deps, insiderProfileId, code);
+
+    await expect(startWorkEmailOtp(deps, session.userId, "person@beta.com")).rejects.toThrow(InsiderCompanyChangeError);
   });
 });
