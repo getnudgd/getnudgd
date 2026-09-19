@@ -93,12 +93,18 @@ export const seekerProfiles = pgTable(
   })
 );
 
-export const companies = pgTable("companies", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: text("name").notNull(),
-  tier: text("tier").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const companies = pgTable(
+  "companies",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    tier: text("tier").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    nameIdx: uniqueIndex("companies_name_idx").on(table.name),
+  })
+);
 
 export const companyDomains = pgTable(
   "company_domains",

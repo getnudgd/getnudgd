@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { getEnv } from "../src/config/env";
@@ -48,7 +49,12 @@ async function main() {
   console.log("Seeded placeholder app_config (rules v1, credit_packs v1).");
 
   for (const company of PLACEHOLDER_COMPANIES) {
-    const [row] = await db.insert(companies).values({ name: company.name, tier: company.tier }).returning();
+    const [inserted] = await db
+      .insert(companies)
+      .values({ name: company.name, tier: company.tier })
+      .onConflictDoNothing()
+      .returning();
+    const row = inserted ?? (await db.select().from(companies).where(eq(companies.name, company.name)))[0];
     for (const domain of company.domains) {
       await db.insert(companyDomains).values({ companyId: row.id, domain }).onConflictDoNothing();
     }
