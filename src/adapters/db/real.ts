@@ -238,7 +238,7 @@ export function createRealDatabase(db: NodePgDatabase): Database {
       },
     },
     insiders: {
-      async listInsiders(filters) {
+      async listInsiders(filters: InsiderSearchFilters) {
         const conditions = [eq(insiderProfiles.available, true), isNotNull(insiderProfiles.verifiedAt)];
         if (filters.companyId) conditions.push(eq(insiderProfiles.companyId, filters.companyId));
 
