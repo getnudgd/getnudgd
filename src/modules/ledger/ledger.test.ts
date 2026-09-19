@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
-import { post, balance, escrowFor, type LedgerDeps } from "./ledger";
+import { post, balance, escrowFor, platformAccount, type LedgerDeps } from "./ledger";
 import { LedgerImbalanceError } from "../../adapters/db/types";
 
 describe("ledger.post", () => {
@@ -109,5 +109,11 @@ describe("ledger.post", () => {
       for (const owner of owners) total += await balance(deps, "platform", owner, currency);
       expect(total).toBe(0);
     }
+  });
+});
+
+describe("platformAccount", () => {
+  it("returns the fixed platform owner reference", () => {
+    expect(platformAccount()).toEqual({ ownerType: "platform", ownerId: "platform" });
   });
 });

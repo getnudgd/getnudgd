@@ -48,3 +48,7 @@ export async function balance(
 export function escrowFor(requestId: string): { ownerType: "escrow"; ownerId: string } {
   return { ownerType: "escrow", ownerId: requestId };
 }
+
+export function platformAccount(): { ownerType: "platform"; ownerId: "platform" } {
+  return { ownerType: "platform", ownerId: "platform" };
+}

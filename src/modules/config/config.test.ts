@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
-import { getRules, getPacks, ConfigNotFoundError } from "./config";
+import { getRules, getPacks, getRulesWithVersion, ConfigNotFoundError } from "./config";
 
 const RULES_V1 = {
   key: "rules",
@@ -66,5 +66,38 @@ describe("config.getPacks", () => {
   it("throws ConfigNotFoundError when no packs exist", async () => {
     const { db } = createFakeDatabase();
     await expect(getPacks({ db })).rejects.toThrow(ConfigNotFoundError);
+  });
+});
+
+describe("getRulesWithVersion", () => {
+  it("returns both the parsed rules and the version they came from", async () => {
+    const { db, seedConfig } = createFakeDatabase();
+    seedConfig({
+      key: "rules",
+      version: 3,
+      placeholder: true,
+      value: {
+        responseWindowHours: 48,
+        interviewWindowDays: 14,
+        reverificationDays: 90,
+        tranche1Percent: 50,
+        tranche2Percent: 50,
+        refundPercentOnDecline: 100,
+        refundPercentOnExpiry: 100,
+        minRedemptionPoints: 500,
+        panThresholdPoints: 5000,
+        freeCreditGrant: 3,
+        requestCostByTier: { tier1: 3, tier2: 2, tier3: 1 },
+      },
+    });
+
+    const result = await getRulesWithVersion({ db });
+    expect(result.version).toBe(3);
+    expect(result.rules.requestCostByTier.tier1).toBe(3);
+  });
+
+  it("throws ConfigNotFoundError when no rules exist", async () => {
+    const { db } = createFakeDatabase();
+    await expect(getRulesWithVersion({ db })).rejects.toThrow(ConfigNotFoundError);
   });
 });
