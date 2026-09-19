@@ -126,3 +126,27 @@ export async function expire(deps: RequestsDeps, requestId: string): Promise<Ins
     throw err;
   }
 }
+
+export interface SubmitProofInput {
+  idempotencyKey: string;
+  requestId: string;
+  proofType: "screenshot" | "text";
+  objectKey?: string;
+  textContent?: string;
+}
+
+export async function submitProof(deps: RequestsDeps, input: SubmitProofInput): Promise<InsiderRequestRecord> {
+  const record = await deps.db.requests.getById(input.requestId);
+  if (!record) throw new Error(`Insider request ${input.requestId} not found`);
+  const toState = nextState(record.state as RequestState, "proof");
+
+  return deps.db.requests.submitProof({
+    idempotencyKey: `proof:${input.idempotencyKey}`,
+    requestId: input.requestId,
+    fromState: record.state,
+    toState,
+    proofType: input.proofType,
+    objectKey: input.objectKey,
+    textContent: input.textContent,
+  });
+}

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
 import { InvalidTransitionError } from "./state";
-import { sendRequest, accept, decline, expire, InsiderUnavailableError, type RequestsDeps } from "./requests";
+import { sendRequest, accept, decline, expire, submitProof, InsiderUnavailableError, type RequestsDeps } from "./requests";
 
 const RULES_VALUE = {
   responseWindowHours: 48,
@@ -227,5 +227,63 @@ describe("expire", () => {
 
     // creditCost 3, must still refund at v1's 60% (round(1.8)=2), not v2's 0%.
     expect(await db.ledger.getBalance("seeker", seekerProfile.id, "credits")).toBe(4);
+  });
+});
+
+describe("submitProof", () => {
+  it("moves an ACCEPTED request to PROOF_PENDING and records the proof", async () => {
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const request = await sendRequest(deps, { idempotencyKey: "sp1", seekerProfileId, insiderProfileId });
+    await accept(deps, request.id);
+
+    const updated = await submitProof(deps, {
+      idempotencyKey: "sp1-proof",
+      requestId: request.id,
+      proofType: "text",
+      textContent: "Submitted internally on 2026-09-19",
+    });
+
+    expect(updated.state).toBe("PROOF_PENDING");
+    const proof = await deps.db.requests.getProofByRequestId(request.id);
+    expect(proof?.textContent).toBe("Submitted internally on 2026-09-19");
+  });
+
+  it("throws when submitting proof for a request that is not ACCEPTED", async () => {
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const request = await sendRequest(deps, { idempotencyKey: "sp2", seekerProfileId, insiderProfileId });
+    // request is still SENT, not ACCEPTED
+    await expect(
+      submitProof(deps, { idempotencyKey: "sp2-proof", requestId: request.id, proofType: "text", textContent: "x" })
+    ).rejects.toThrow(InvalidTransitionError);
+  });
+
+  it("allows resubmission after a rejection, using a fresh idempotencyKey each time", async () => {
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const request = await sendRequest(deps, { idempotencyKey: "sp3", seekerProfileId, insiderProfileId });
+    await accept(deps, request.id);
+    await submitProof(deps, { idempotencyKey: "sp3-proof-1", requestId: request.id, proofType: "text", textContent: "first attempt" });
+
+    // Simulate an admin rejection (PROOF_PENDING -> ACCEPTED) directly via the adapter,
+    // since the admin module doesn't exist until this same task builds it below.
+    await deps.db.requests.applyTransition({
+      idempotencyKey: "review:sp3-reject-1",
+      requestId: request.id,
+      event: "reject",
+      fromState: "PROOF_PENDING",
+      toState: "ACCEPTED",
+      ledgerEntries: [],
+      ledgerEventType: "request.reject",
+    });
+
+    const resubmitted = await submitProof(deps, {
+      idempotencyKey: "sp3-proof-2",
+      requestId: request.id,
+      proofType: "text",
+      textContent: "second attempt",
+    });
+
+    expect(resubmitted.state).toBe("PROOF_PENDING");
+    const proof = await deps.db.requests.getProofByRequestId(request.id);
+    expect(proof?.textContent).toBe("second attempt");
   });
 });
