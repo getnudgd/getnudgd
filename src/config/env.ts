@@ -39,7 +39,7 @@ const envSchema = z.object({
   GIFTCARD_VENDOR: z.enum(["manual", "xoxoday", "qwikcilver"]).default("manual"),
   GIFTCARD_API_KEY: z.string().optional(),
 
-  SESSION_COOKIE_SECRET: z.string().optional(),
+  SESSION_COOKIE_SECRET: z.string().min(32, "SESSION_COOKIE_SECRET must be at least 32 characters"),
   SENTRY_DSN: z.string().optional(),
   ADMIN_IP_ALLOWLIST: z.string().optional(),
 });

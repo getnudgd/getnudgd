@@ -1,7 +1,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { getEnv } from "../src/config/env";
-import { appConfig } from "../drizzle/schema";
+import { appConfig, companies, companyDomains } from "../drizzle/schema";
 
 const PLACEHOLDER_RULES = {
   key: "rules",
@@ -33,14 +33,29 @@ const PLACEHOLDER_PACKS = {
   ],
 };
 
+const PLACEHOLDER_COMPANIES = [
+  { name: "Acme Technologies", tier: "tier1", domains: ["acme.com"] },
+  { name: "Beta Systems", tier: "tier2", domains: ["betasystems.com"] },
+  { name: "Gamma Labs", tier: "tier3", domains: ["gammalabs.io"] },
+];
+
 async function main() {
   const env = getEnv();
   const pool = new Pool({ connectionString: env.DATABASE_URL });
   const db = drizzle(pool);
   await db.insert(appConfig).values(PLACEHOLDER_RULES).onConflictDoNothing();
   await db.insert(appConfig).values(PLACEHOLDER_PACKS).onConflictDoNothing();
-  await pool.end();
   console.log("Seeded placeholder app_config (rules v1, credit_packs v1).");
+
+  for (const company of PLACEHOLDER_COMPANIES) {
+    const [row] = await db.insert(companies).values({ name: company.name, tier: company.tier }).returning();
+    for (const domain of company.domains) {
+      await db.insert(companyDomains).values({ companyId: row.id, domain }).onConflictDoNothing();
+    }
+  }
+  console.log(`Seeded ${PLACEHOLDER_COMPANIES.length} placeholder companies.`);
+
+  await pool.end();
 }
 
 main().catch((err) => {

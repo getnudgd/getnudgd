@@ -6,6 +6,7 @@ const REQUIRED_ENV = {
   BRAND_NAME: "GetNudgd",
   BRAND_DOMAIN: "getnudgd.com",
   DATABASE_URL: "postgres://getnudgd:getnudgd@localhost:5432/getnudgd",
+  SESSION_COOKIE_SECRET: "a-test-secret-that-is-at-least-32-characters-long",
 };
 
 describe("getEnv", () => {
@@ -45,5 +46,15 @@ describe("getEnv", () => {
     process.env.APP_URL = "http://changed.example";
     const second = getEnv();
     expect(second).toBe(first);
+  });
+
+  it("throws when SESSION_COOKIE_SECRET is missing", () => {
+    delete process.env.SESSION_COOKIE_SECRET;
+    expect(() => getEnv()).toThrow(/SESSION_COOKIE_SECRET/);
+  });
+
+  it("throws when SESSION_COOKIE_SECRET is too short", () => {
+    process.env.SESSION_COOKIE_SECRET = "too-short";
+    expect(() => getEnv()).toThrow(/SESSION_COOKIE_SECRET/);
   });
 });
