@@ -1,7 +1,7 @@
 import type { SessionPayload } from "./session";
 
 export type Action = "read" | "update";
-export type ResourceType = "seekerProfile" | "insiderProfile" | "userRecord";
+export type ResourceType = "seekerProfile" | "insiderProfile" | "userRecord" | "resume";
 
 export interface Resource {
   type: ResourceType;

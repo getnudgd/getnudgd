@@ -26,4 +26,12 @@ describe("authorize", () => {
     expect(authorize(adminSession, "update", { type: "seekerProfile", ownerUserId: "u1" })).toBe(true);
     expect(authorize(adminSession, "read", { type: "userRecord", ownerUserId: "someone-else" })).toBe(true);
   });
+
+  it("allows a user to read their own resume", () => {
+    expect(authorize(seekerSession, "read", { type: "resume", ownerUserId: "u1" })).toBe(true);
+  });
+
+  it("denies a user reading someone else's resume", () => {
+    expect(authorize(seekerSession, "read", { type: "resume", ownerUserId: "u2" })).toBe(false);
+  });
 });
