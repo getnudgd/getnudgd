@@ -152,3 +152,39 @@ export const resumes = pgTable(
     statusCheck: check("resumes_status_check", sql`${table.status} in ('uploaded','parsed','tailored')`),
   })
 );
+
+export const insiderRequests = pgTable(
+  "insider_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    seekerProfileId: uuid("seeker_profile_id").notNull().references(() => seekerProfiles.id),
+    insiderProfileId: uuid("insider_profile_id").notNull().references(() => insiderProfiles.id),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    state: text("state").notNull(),
+    creditCost: integer("credit_cost").notNull(),
+    rulesVersion: integer("rules_version").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    stateCheck: check(
+      "insider_requests_state_check",
+      sql`${table.state} in ('SENT','ACCEPTED','DECLINED','EXPIRED','CANCELLED','PROOF_PENDING','SUBMITTED','INTERVIEW','COMPLETE','NO_INTERVIEW','CLOSED')`
+    ),
+  })
+);
+
+export const requestEvents = pgTable(
+  "request_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    requestId: uuid("request_id").notNull().references(() => insiderRequests.id),
+    idempotencyKey: text("idempotency_key").notNull(),
+    event: text("event").notNull(),
+    fromState: text("from_state"),
+    toState: text("to_state").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    idempotencyKeyIdx: uniqueIndex("request_events_idempotency_key_idx").on(table.idempotencyKey),
+  })
+);
