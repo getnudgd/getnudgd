@@ -5,6 +5,7 @@ import {
   signInWithFirebaseToken,
   startWorkEmailOtp,
   verifyWorkEmailOtp,
+  promoteRoleForInsiderVerification,
   WorkEmailDomainError,
   type IdentityDeps,
 } from "./identity";
@@ -91,5 +92,64 @@ describe("verifyWorkEmailOtp", () => {
     vi.advanceTimersByTime(11 * 60 * 1000);
     expect(await verifyWorkEmailOtp(deps, insiderProfileId, code)).toBe(false);
     vi.useRealTimers();
+  });
+});
+
+describe("promoteRoleForInsiderVerification", () => {
+  it("promotes a seeker to both", () => {
+    expect(promoteRoleForInsiderVerification("seeker")).toBe("both");
+  });
+
+  it("leaves insider unchanged", () => {
+    expect(promoteRoleForInsiderVerification("insider")).toBe("insider");
+  });
+
+  it("leaves both unchanged", () => {
+    expect(promoteRoleForInsiderVerification("both")).toBe("both");
+  });
+
+  it("leaves admin unchanged", () => {
+    expect(promoteRoleForInsiderVerification("admin")).toBe("admin");
+  });
+});
+
+describe("verifyWorkEmailOtp role promotion", () => {
+  it("promotes a seeker to \"both\" on successful verification", async () => {
+    const { deps, issueToken, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const token = issueToken({ providerUid: "fb-rolep-1", email: "rolep1@acme.com" });
+    const session = await signInWithFirebaseToken(deps, token);
+    expect(session.role).toBe("seeker");
+
+    const { insiderProfileId, code } = await startWorkEmailOtp(deps, session.userId, "rolep1@acme.com");
+    await verifyWorkEmailOtp(deps, insiderProfileId, code);
+
+    const user = await deps.db.identity.getUserById(session.userId);
+    expect(user?.role).toBe("both");
+  });
+
+  it("does not change role when verification fails", async () => {
+    const { deps, issueToken, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const token = issueToken({ providerUid: "fb-rolep-2", email: "rolep2@acme.com" });
+    const session = await signInWithFirebaseToken(deps, token);
+
+    const { insiderProfileId } = await startWorkEmailOtp(deps, session.userId, "rolep2@acme.com");
+    await verifyWorkEmailOtp(deps, insiderProfileId, "000000");
+
+    const user = await deps.db.identity.getUserById(session.userId);
+    expect(user?.role).toBe("seeker");
+  });
+
+  it("leaves an already-admin role unchanged", async () => {
+    const { deps, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const adminUser = await deps.db.identity.findOrCreateUser("fb-rolep-3", "admin@acme.com", "admin");
+
+    const { insiderProfileId, code } = await startWorkEmailOtp(deps, adminUser.id, "admin@acme.com");
+    await verifyWorkEmailOtp(deps, insiderProfileId, code);
+
+    const user = await deps.db.identity.getUserById(adminUser.id);
+    expect(user?.role).toBe("admin");
   });
 });

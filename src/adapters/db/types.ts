@@ -102,5 +102,7 @@ export interface Database {
     markInsiderVerified(insiderProfileId: string, verifiedAt: Date): Promise<void>;
     storeWorkEmailOtp(insiderProfileId: string, codeHash: string, expiresAt: Date): Promise<void>;
     consumeWorkEmailOtp(insiderProfileId: string, codeHash: string, now: Date): Promise<boolean>;
+    getInsiderProfileById(insiderProfileId: string): Promise<InsiderProfileRecord | null>;
+    setUserRole(userId: string, role: Role): Promise<UserRecord>;
   };
 }

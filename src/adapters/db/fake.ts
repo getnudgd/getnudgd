@@ -139,6 +139,15 @@ export function createFakeDatabase(): {
         otp.consumedAt = now;
         return true;
       },
+      async getInsiderProfileById(insiderProfileId: string) {
+        return insiderProfiles.find((p) => p.id === insiderProfileId) ?? null;
+      },
+      async setUserRole(userId: string, role: Role) {
+        const user = users.find((u) => u.id === userId);
+        if (!user) throw new Error(`User ${userId} not found`);
+        user.role = role;
+        return user;
+      },
     },
   };
 

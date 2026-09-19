@@ -206,6 +206,15 @@ export function createRealDatabase(db: NodePgDatabase): Database {
         await db.update(workEmailOtps).set({ consumedAt: now }).where(eq(workEmailOtps.id, otp.id));
         return true;
       },
+      async getInsiderProfileById(insiderProfileId) {
+        const [row] = await db.select().from(insiderProfiles).where(eq(insiderProfiles.id, insiderProfileId));
+        return (row as InsiderProfileRecord) ?? null;
+      },
+      async setUserRole(userId, role) {
+        const [row] = await db.update(users).set({ role }).where(eq(users.id, userId)).returning();
+        if (!row) throw new Error(`User ${userId} not found`);
+        return row as UserRecord;
+      },
     },
   };
 }

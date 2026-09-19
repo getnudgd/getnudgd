@@ -147,4 +147,26 @@ describe("createFakeDatabase identity", () => {
     const second = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "idem@acme.com");
     expect(second.id).toBe(first.id);
   });
+
+  it("gets an insider profile by id, and returns null when not found", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const user = await db.identity.findOrCreateUser("fb-gp1", "gp1@acme.com", "seeker");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "gp1@acme.com");
+    expect((await db.identity.getInsiderProfileById(profile.id))?.id).toBe(profile.id);
+    expect(await db.identity.getInsiderProfileById("nope")).toBeNull();
+  });
+
+  it("sets a user's role", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-role1", "role1@b.com", "seeker");
+    const updated = await db.identity.setUserRole(user.id, "both");
+    expect(updated.role).toBe("both");
+    expect((await db.identity.getUserById(user.id))?.role).toBe("both");
+  });
+
+  it("throws when setting role for a nonexistent user", async () => {
+    const { db } = createFakeDatabase();
+    await expect(db.identity.setUserRole("nope", "both")).rejects.toThrow();
+  });
 });

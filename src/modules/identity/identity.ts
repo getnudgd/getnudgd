@@ -25,6 +25,11 @@ export class WorkEmailDomainError extends Error {
   }
 }
 
+export function promoteRoleForInsiderVerification(currentRole: Role): Role {
+  if (currentRole === "seeker") return "both";
+  return currentRole;
+}
+
 const OTP_TTL_MS = 10 * 60 * 1000;
 
 function hashOtpCode(code: string): string {
@@ -60,6 +65,17 @@ export async function startWorkEmailOtp(
 
 export async function verifyWorkEmailOtp(deps: IdentityDeps, insiderProfileId: string, code: string): Promise<boolean> {
   const valid = await deps.db.identity.consumeWorkEmailOtp(insiderProfileId, hashOtpCode(code), new Date());
-  if (valid) await deps.db.identity.markInsiderVerified(insiderProfileId, new Date());
-  return valid;
+  if (!valid) return false;
+
+  await deps.db.identity.markInsiderVerified(insiderProfileId, new Date());
+
+  const profile = await deps.db.identity.getInsiderProfileById(insiderProfileId);
+  if (profile) {
+    const user = await deps.db.identity.getUserById(profile.userId);
+    if (user) {
+      await deps.db.identity.setUserRole(user.id, promoteRoleForInsiderVerification(user.role));
+    }
+  }
+
+  return true;
 }
