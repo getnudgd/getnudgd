@@ -12,6 +12,7 @@ import {
   CompanyRecord,
   SeekerProfileRecord,
   InsiderProfileRecord,
+  ResumeRecord,
 } from "./types";
 
 function assertZeroSum(entries: PostLedgerTxnInput["entries"]): void {
@@ -36,6 +37,7 @@ export function createFakeDatabase(): {
   const companies: CompanyRecord[] = [];
   const companyDomainToId = new Map<string, string>();
   const otps: { insiderProfileId: string; codeHash: string; expiresAt: Date; consumedAt: Date | null }[] = [];
+  const resumeRows: ResumeRecord[] = [];
   let nextId = 1;
   const genId = () => `fake-${nextId++}`;
 
@@ -147,6 +149,21 @@ export function createFakeDatabase(): {
         if (!user) throw new Error(`User ${userId} not found`);
         user.role = role;
         return user;
+      },
+    },
+    resumes: {
+      async registerUpload(seekerProfileId: string, objectKey: string, originalFilename: string) {
+        const resume: ResumeRecord = {
+          id: genId(), seekerProfileId, objectKey, originalFilename, status: "uploaded", createdAt: new Date(),
+        };
+        resumeRows.push(resume);
+        return resume;
+      },
+      async getResumeById(resumeId: string) {
+        return resumeRows.find((r) => r.id === resumeId) ?? null;
+      },
+      async listResumesBySeekerProfileId(seekerProfileId: string) {
+        return resumeRows.filter((r) => r.seekerProfileId === seekerProfileId);
       },
     },
   };

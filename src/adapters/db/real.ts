@@ -11,6 +11,7 @@ import {
   companies,
   companyDomains,
   workEmailOtps,
+  resumes,
 } from "../../../drizzle/schema";
 import type {
   Database,
@@ -22,6 +23,7 @@ import type {
   CompanyRecord,
   SeekerProfileRecord,
   InsiderProfileRecord,
+  ResumeRecord,
 } from "./types";
 import { LedgerImbalanceError } from "./types";
 
@@ -214,6 +216,23 @@ export function createRealDatabase(db: NodePgDatabase): Database {
         const [row] = await db.update(users).set({ role }).where(eq(users.id, userId)).returning();
         if (!row) throw new Error(`User ${userId} not found`);
         return row as UserRecord;
+      },
+    },
+    resumes: {
+      async registerUpload(seekerProfileId, objectKey, originalFilename) {
+        const [row] = await db
+          .insert(resumes)
+          .values({ seekerProfileId, objectKey, originalFilename })
+          .returning();
+        return row as ResumeRecord;
+      },
+      async getResumeById(resumeId) {
+        const [row] = await db.select().from(resumes).where(eq(resumes.id, resumeId));
+        return (row as ResumeRecord) ?? null;
+      },
+      async listResumesBySeekerProfileId(seekerProfileId) {
+        const rows = await db.select().from(resumes).where(eq(resumes.seekerProfileId, seekerProfileId));
+        return rows as ResumeRecord[];
       },
     },
   };

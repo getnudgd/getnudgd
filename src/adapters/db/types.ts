@@ -83,6 +83,15 @@ export interface InsiderProfileRecord {
   weeklyLimit: number;
 }
 
+export interface ResumeRecord {
+  id: string;
+  seekerProfileId: string;
+  objectKey: string;
+  originalFilename: string;
+  status: string;
+  createdAt: Date;
+}
+
 export interface Database {
   ledger: {
     postTxn(input: PostLedgerTxnInput): Promise<LedgerTxnRecord>;
@@ -104,5 +113,10 @@ export interface Database {
     consumeWorkEmailOtp(insiderProfileId: string, codeHash: string, now: Date): Promise<boolean>;
     getInsiderProfileById(insiderProfileId: string): Promise<InsiderProfileRecord | null>;
     setUserRole(userId: string, role: Role): Promise<UserRecord>;
+  };
+  resumes: {
+    registerUpload(seekerProfileId: string, objectKey: string, originalFilename: string): Promise<ResumeRecord>;
+    getResumeById(resumeId: string): Promise<ResumeRecord | null>;
+    listResumesBySeekerProfileId(seekerProfileId: string): Promise<ResumeRecord[]>;
   };
 }

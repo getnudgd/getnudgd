@@ -170,3 +170,34 @@ describe("createFakeDatabase identity", () => {
     await expect(db.identity.setUserRole("nope", "both")).rejects.toThrow();
   });
 });
+
+describe("createFakeDatabase resumes", () => {
+  it("registers an upload with status \"uploaded\"", async () => {
+    const { db } = createFakeDatabase();
+    const resume = await db.resumes.registerUpload("seeker-1", "resumes/seeker-1/resume.pdf", "resume.pdf");
+    expect(resume.status).toBe("uploaded");
+    expect(resume.seekerProfileId).toBe("seeker-1");
+    expect(resume.objectKey).toBe("resumes/seeker-1/resume.pdf");
+  });
+
+  it("returns null for a resume id that doesn't exist", async () => {
+    const { db } = createFakeDatabase();
+    expect(await db.resumes.getResumeById("nope")).toBeNull();
+  });
+
+  it("gets a resume by id", async () => {
+    const { db } = createFakeDatabase();
+    const created = await db.resumes.registerUpload("seeker-1", "resumes/seeker-1/a.pdf", "a.pdf");
+    expect((await db.resumes.getResumeById(created.id))?.id).toBe(created.id);
+  });
+
+  it("lists resumes for a seeker profile, excluding other seekers'", async () => {
+    const { db } = createFakeDatabase();
+    await db.resumes.registerUpload("seeker-1", "resumes/seeker-1/a.pdf", "a.pdf");
+    await db.resumes.registerUpload("seeker-1", "resumes/seeker-1/b.pdf", "b.pdf");
+    await db.resumes.registerUpload("seeker-2", "resumes/seeker-2/c.pdf", "c.pdf");
+    const results = await db.resumes.listResumesBySeekerProfileId("seeker-1");
+    expect(results).toHaveLength(2);
+    expect(results.every((r) => r.seekerProfileId === "seeker-1")).toBe(true);
+  });
+});
