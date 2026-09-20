@@ -34,7 +34,7 @@ export async function reviewProof(deps: AdminDeps, input: ReviewProofInput): Pro
   const toState = nextState(record.state as RequestState, event);
 
   return deps.db.requests.applyTransition({
-    idempotencyKey: `review:${input.idempotencyKey}`,
+    idempotencyKey: `review:${input.requestId}:${input.idempotencyKey}`,
     requestId: input.requestId,
     event,
     fromState: record.state,

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
 import { InvalidTransitionError } from "./state";
-import { sendRequest, accept, decline, expire, submitProof, InsiderUnavailableError, type RequestsDeps } from "./requests";
+import { sendRequest, accept, decline, expire, submitProof, InsiderUnavailableError, MissingProofContentError, type RequestsDeps } from "./requests";
 
 const RULES_VALUE = {
   responseWindowHours: 48,
@@ -285,5 +285,21 @@ describe("submitProof", () => {
     expect(resubmitted.state).toBe("PROOF_PENDING");
     const proof = await deps.db.requests.getProofByRequestId(request.id);
     expect(proof?.textContent).toBe("second attempt");
+  });
+
+  it("throws when submitting a screenshot proof with no objectKey, or a text proof with no textContent", async () => {
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const request = await sendRequest(deps, { idempotencyKey: "sp4", seekerProfileId, insiderProfileId });
+    await accept(deps, request.id);
+
+    await expect(
+      submitProof(deps, { idempotencyKey: "sp4-proof-a", requestId: request.id, proofType: "screenshot" })
+    ).rejects.toThrow(MissingProofContentError);
+    await expect(
+      submitProof(deps, { idempotencyKey: "sp4-proof-b", requestId: request.id, proofType: "text" })
+    ).rejects.toThrow(MissingProofContentError);
+    await expect(
+      submitProof(deps, { idempotencyKey: "sp4-proof-c", requestId: request.id, proofType: "text", textContent: "   " })
+    ).rejects.toThrow(MissingProofContentError);
   });
 });

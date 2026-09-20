@@ -16,6 +16,13 @@ export class InsiderUnavailableError extends Error {
   }
 }
 
+export class MissingProofContentError extends Error {
+  constructor(proofType: "screenshot" | "text") {
+    super(`A ${proofType === "screenshot" ? "file" : "text"} is required to submit ${proofType} proof`);
+    this.name = "MissingProofContentError";
+  }
+}
+
 export interface SendRequestInput {
   idempotencyKey: string;
   seekerProfileId: string;
@@ -136,12 +143,19 @@ export interface SubmitProofInput {
 }
 
 export async function submitProof(deps: RequestsDeps, input: SubmitProofInput): Promise<InsiderRequestRecord> {
+  if (input.proofType === "screenshot" && !input.objectKey) {
+    throw new MissingProofContentError("screenshot");
+  }
+  if (input.proofType === "text" && !input.textContent?.trim()) {
+    throw new MissingProofContentError("text");
+  }
+
   const record = await deps.db.requests.getById(input.requestId);
   if (!record) throw new Error(`Insider request ${input.requestId} not found`);
   const toState = nextState(record.state as RequestState, "proof");
 
   return deps.db.requests.submitProof({
-    idempotencyKey: `proof:${input.idempotencyKey}`,
+    idempotencyKey: `proof:${input.requestId}:${input.idempotencyKey}`,
     requestId: input.requestId,
     fromState: record.state,
     toState,

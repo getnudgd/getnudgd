@@ -80,6 +80,11 @@ describe("reviewProof", () => {
       reason: "Screenshot was unreadable",
     });
     expect(updated.state).toBe("ACCEPTED");
+
+    const auditRows = await deps.db.requests.listAuditLogByTarget("insider_request", requestId);
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0].action).toBe("proof.reject");
+    expect(auditRows[0].detail).toBe("Screenshot was unreadable");
   });
 
   it("supports reject, resubmit, reject again — each with its own idempotencyKey", async () => {
