@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
+import { createFakeQueueClient } from "../../jobs/queue.fake";
 import { sendRequest, accept, submitProof, type RequestsDeps } from "../requests/requests";
 import { reviewProof, listPendingProofs, MissingRejectionReasonError, type AdminDeps } from "./admin";
 
@@ -37,7 +38,7 @@ async function makeProofPendingRequest(): Promise<{ deps: AdminDeps & RequestsDe
   const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, `i${Math.random()}@acme.com`);
   await db.identity.markInsiderVerified(insiderProfile.id, new Date());
 
-  const deps = { db };
+  const deps = { db, queue: createFakeQueueClient() };
   const request = await sendRequest(deps, {
     idempotencyKey: `send:${seekerProfile.id}`,
     seekerProfileId: seekerProfile.id,

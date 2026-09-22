@@ -3,10 +3,12 @@ import { RequestStateConflictError } from "../../adapters/db/types";
 import { getRulesWithVersion } from "../config/config";
 import { UnknownCompanyTierError } from "../insiders/insiders";
 import { escrowFor, platformAccount } from "../ledger/ledger";
+import type { QueueClient } from "../../jobs/queue";
 import { nextState, type RequestState } from "./state";
 
 export interface RequestsDeps {
   db: Database;
+  queue: QueueClient;
 }
 
 export class InsiderUnavailableError extends Error {
@@ -42,7 +44,7 @@ export async function sendRequest(deps: RequestsDeps, input: SendRequestInput): 
   const creditCost = rules.requestCostByTier[summary.companyTier];
   if (creditCost === undefined) throw new UnknownCompanyTierError(summary.companyTier);
 
-  return deps.db.requests.sendRequest({
+  const request = await deps.db.requests.sendRequest({
     idempotencyKey: `send:${input.idempotencyKey}`,
     seekerProfileId: input.seekerProfileId,
     insiderProfileId: input.insiderProfileId,
@@ -50,6 +52,14 @@ export async function sendRequest(deps: RequestsDeps, input: SendRequestInput): 
     creditCost,
     rulesVersion,
   });
+
+  await deps.queue.send(
+    "request.expire",
+    { requestId: request.id },
+    { singletonKey: `request:${request.id}:expire`, startAfterSeconds: rules.responseWindowHours * 3600 }
+  );
+
+  return request;
 }
 
 function refundEntries(
@@ -132,6 +142,19 @@ export async function expire(deps: RequestsDeps, requestId: string): Promise<Ins
     }
     throw err;
   }
+}
+
+export async function sweepExpiredSent(deps: RequestsDeps, now: Date): Promise<InsiderRequestRecord[]> {
+  const { rules } = await getRulesWithVersion(deps);
+  const deadlineMs = rules.responseWindowHours * 3600 * 1000;
+  const sentRequests = await deps.db.requests.listByState("SENT");
+  const overdue = sentRequests.filter((r) => now.getTime() - r.createdAt.getTime() >= deadlineMs);
+
+  const results: InsiderRequestRecord[] = [];
+  for (const request of overdue) {
+    results.push(await expire(deps, request.id));
+  }
+  return results;
 }
 
 export interface SubmitProofInput {
