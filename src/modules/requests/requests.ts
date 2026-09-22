@@ -53,11 +53,19 @@ export async function sendRequest(deps: RequestsDeps, input: SendRequestInput): 
     rulesVersion,
   });
 
-  await deps.queue.send(
-    "request.expire",
-    { requestId: request.id },
-    { singletonKey: `request:${request.id}:expire`, startAfterSeconds: rules.responseWindowHours * 3600 }
-  );
+  try {
+    await deps.queue.send(
+      "request.expire",
+      { requestId: request.id },
+      { singletonKey: `request:${request.id}:expire`, startAfterSeconds: rules.responseWindowHours * 3600 }
+    );
+  } catch (err) {
+    // The DB transaction above (debit + escrow + request row) already
+    // committed — the seeker's credits are already spent. Do not fail the
+    // whole call over a lost timer enqueue; the hourly requests.sweep job is
+    // the designed compensating control for exactly this case.
+    console.error(`[requests] failed to enqueue request.expire for request ${request.id}`, err);
+  }
 
   return request;
 }
@@ -152,7 +160,14 @@ export async function sweepExpiredSent(deps: RequestsDeps, now: Date): Promise<I
 
   const results: InsiderRequestRecord[] = [];
   for (const request of overdue) {
-    results.push(await expire(deps, request.id));
+    try {
+      results.push(await expire(deps, request.id));
+    } catch (err) {
+      // This sweep is itself the safety net for lost per-request timers — one
+      // bad/wedged row must not abort the pass and silently skip every other
+      // overdue request behind it. Log and keep going.
+      console.error(`[requests] sweepExpiredSent failed to expire request ${request.id}`, err);
+    }
   }
   return results;
 }

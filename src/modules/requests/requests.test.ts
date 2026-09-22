@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
+import type { Database } from "../../adapters/db/types";
 import { createFakeQueueClient } from "../../jobs/queue.fake";
 import type { QueueClient } from "../../jobs/queue";
 import { InvalidTransitionError } from "./state";
@@ -130,6 +131,45 @@ describe("sendRequest", () => {
     expect(sentJobs[0].payload).toEqual({ requestId: request.id });
     expect(sentJobs[0].options?.singletonKey).toBe(`request:${request.id}:expire`);
     expect(sentJobs[0].options?.startAfterSeconds).toBe(RULES_VALUE.responseWindowHours * 3600);
+  });
+
+  it("still returns the created request when queue.send throws (credits are already committed)", async () => {
+    const failingQueue: QueueClient = {
+      async start() {},
+      async stop() {},
+      async send() {
+        throw new Error("pg-boss unavailable");
+      },
+      async work() {},
+      async schedule() {},
+    };
+    const { db, seedConfig, seedCompany } = createFakeDatabase();
+    seedConfig({ key: "rules", version: 1, placeholder: true, value: RULES_VALUE });
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const seekerUser = await db.identity.findOrCreateUser("fb-qf-1", "qf1@x.com", "seeker");
+    const seekerProfile = await db.identity.createSeekerProfile(seekerUser.id, "QF Seeker");
+    await db.ledger.postTxn({
+      idempotencyKey: "grant:qf1",
+      eventType: "credits.grant",
+      entries: [
+        { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -5 },
+        { ownerType: "seeker", ownerId: seekerProfile.id, currency: "credits", amount: 5 },
+      ],
+    });
+    const insiderUser = await db.identity.findOrCreateUser("fb-qf-2", "qf2@acme.com", "seeker");
+    const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, "qf2@acme.com");
+    await db.identity.markInsiderVerified(insiderProfile.id, new Date());
+
+    const request = await sendRequest(
+      { db, queue: failingQueue },
+      { idempotencyKey: "qf1", seekerProfileId: seekerProfile.id, insiderProfileId: insiderProfile.id }
+    );
+
+    expect(request.state).toBe("SENT");
+    expect(request.creditCost).toBe(3);
+    // The debit + escrow already committed in the DB transaction, independent of the failed enqueue.
+    expect(await db.ledger.getBalance("seeker", seekerProfile.id, "credits")).toBe(2);
+    expect(await db.ledger.getBalance("escrow", request.id, "credits")).toBe(3);
   });
 });
 
@@ -387,5 +427,64 @@ describe("sweepExpiredSent", () => {
     expect(swept.map((r) => r.id)).not.toContain(request.id);
     const updated = await deps.db.requests.getById(request.id);
     expect(updated?.state).toBe("ACCEPTED");
+  });
+
+  it("keeps expiring the remaining overdue requests when one of them fails partway through", async () => {
+    const { db, seedConfig, seedCompany } = createFakeDatabase();
+    seedConfig({ key: "rules", version: 1, placeholder: true, value: RULES_VALUE });
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+
+    async function makeSentRequest(tag: string) {
+      const seekerUser = await db.identity.findOrCreateUser(`fb-sw4-${tag}`, `sw4-${tag}@x.com`, "seeker");
+      const seekerProfile = await db.identity.createSeekerProfile(seekerUser.id, `SW4 ${tag}`);
+      await db.ledger.postTxn({
+        idempotencyKey: `grant:sw4-${tag}`,
+        eventType: "credits.grant",
+        entries: [
+          { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -5 },
+          { ownerType: "seeker", ownerId: seekerProfile.id, currency: "credits", amount: 5 },
+        ],
+      });
+      const insiderUser = await db.identity.findOrCreateUser(`fb-sw4-i-${tag}`, `sw4-i-${tag}@acme.com`, "seeker");
+      const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, `sw4-i-${tag}@acme.com`);
+      await db.identity.markInsiderVerified(insiderProfile.id, new Date());
+      return sendRequest(
+        { db, queue: createFakeQueueClient() },
+        { idempotencyKey: `sw4-${tag}`, seekerProfileId: seekerProfile.id, insiderProfileId: insiderProfile.id }
+      );
+    }
+
+    const failingRequest = await makeSentRequest("fail");
+    const okRequest = await makeSentRequest("ok");
+
+    // A thin wrapper around the fake db that throws only when expire() looks up
+    // the "failing" request's current state, simulating a data inconsistency on
+    // just that one row without inventing new fake-database failure-injection
+    // machinery. listByState (used to find the overdue set) is untouched, so both
+    // requests are still discovered as overdue; only the failing one errors out.
+    const flakyDb: Database = {
+      ...db,
+      requests: {
+        ...db.requests,
+        async getById(requestId: string) {
+          if (requestId === failingRequest.id) {
+            throw new Error("simulated data inconsistency");
+          }
+          return db.requests.getById(requestId);
+        },
+      },
+    };
+
+    const past = new Date(Date.now() + (RULES_VALUE.responseWindowHours * 3600 + 60) * 1000);
+    const swept = await sweepExpiredSent({ db: flakyDb, queue: createFakeQueueClient() }, past);
+
+    expect(swept.map((r) => r.id)).toContain(okRequest.id);
+    expect(swept.map((r) => r.id)).not.toContain(failingRequest.id);
+
+    const okUpdated = await db.requests.getById(okRequest.id);
+    expect(okUpdated?.state).toBe("EXPIRED");
+    // The failing request was never actually transitioned — it's still SENT in the real db.
+    const failingUpdated = await db.requests.getById(failingRequest.id);
+    expect(failingUpdated?.state).toBe("SENT");
   });
 });
