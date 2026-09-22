@@ -1,11 +1,9 @@
-import { getEnv } from "../config/env";
-import { createRealQueueClient } from "./queue.real";
+import { getAdapters } from "../lib/adapters";
 import { startWorker } from "./worker";
 
-const env = getEnv();
-const queue = createRealQueueClient(env.DATABASE_URL);
+const { db, queue } = getAdapters();
 
-startWorker(queue).catch((err) => {
+startWorker({ db, queue }).catch((err) => {
   console.error("[worker] failed to start", err);
   process.exit(1);
 });
