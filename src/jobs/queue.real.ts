@@ -10,9 +10,12 @@ export function createRealQueueClient(connectionString: string): QueueClient {
     async stop() {
       await boss.stop();
     },
-    async send(queueName, payload) {
+    async send(queueName, payload, options) {
       await boss.createQueue(queueName);
-      return boss.send(queueName, payload as object);
+      return boss.send(queueName, payload as object, {
+        singletonKey: options?.singletonKey,
+        startAfter: options?.startAfterSeconds,
+      });
     },
     async work(queueName, handler) {
       await boss.createQueue(queueName);
@@ -21,6 +24,10 @@ export function createRealQueueClient(connectionString: string): QueueClient {
           await handler(job.data);
         }
       });
+    },
+    async schedule(queueName, cron, payload) {
+      await boss.createQueue(queueName);
+      await boss.schedule(queueName, cron, payload as object);
     },
   };
 }

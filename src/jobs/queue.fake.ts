@@ -1,4 +1,4 @@
-import type { QueueClient, JobHandler } from "./queue";
+import type { QueueClient, JobHandler, SendOptions } from "./queue";
 
 export function createFakeQueueClient(): QueueClient {
   const queues: Record<string, unknown[]> = {};
@@ -12,7 +12,7 @@ export function createFakeQueueClient(): QueueClient {
     async stop() {
       started = false;
     },
-    async send(queueName, payload) {
+    async send(queueName, payload, _options?: SendOptions) {
       if (!started) return null;
       (queues[queueName] ??= []).push(payload);
       const handler = handlers[queueName];
@@ -21,6 +21,11 @@ export function createFakeQueueClient(): QueueClient {
     },
     async work(queueName, handler) {
       handlers[queueName] = handler;
+    },
+    async schedule(_queueName, _cron, _payload) {
+      // The fake has no real cron scheduler — recording the registration is
+      // enough for tests to verify wiring; the sweep job's actual LOGIC is
+      // tested directly as a plain async function call, not through this.
     },
   };
 }

@@ -17,4 +17,23 @@ describe("createFakeQueueClient", () => {
     expect(jobId).not.toBeNull();
     expect(handler).toHaveBeenCalledWith({ id: "r1" });
   });
+
+  it("accepts SendOptions without erroring and still delivers the payload", async () => {
+    const queue = createFakeQueueClient();
+    const handler = vi.fn(async () => {});
+    await queue.work("request.expire", handler);
+    await queue.start();
+    const jobId = await queue.send(
+      "request.expire",
+      { requestId: "r1" },
+      { singletonKey: "request:r1:expire", startAfterSeconds: 172800 }
+    );
+    expect(jobId).not.toBeNull();
+    expect(handler).toHaveBeenCalledWith({ requestId: "r1" });
+  });
+
+  it("schedule does not throw and does not require start", async () => {
+    const queue = createFakeQueueClient();
+    await expect(queue.schedule("requests.sweep", "0 * * * *", {})).resolves.toBeUndefined();
+  });
 });
