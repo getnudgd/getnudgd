@@ -15,6 +15,14 @@ const eslintConfig = defineConfig([
     ".claude/**",
     ".worktrees/**",
   ]),
+  {
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { argsIgnorePattern: "^_" },
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;

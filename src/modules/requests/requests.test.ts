@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
+import type { Database } from "../../adapters/db/types";
+import { createFakeQueueClient } from "../../jobs/queue.fake";
+import type { QueueClient } from "../../jobs/queue";
 import { InvalidTransitionError } from "./state";
-import { sendRequest, accept, decline, expire, submitProof, InsiderUnavailableError, MissingProofContentError, type RequestsDeps } from "./requests";
+import { sendRequest, accept, decline, expire, submitProof, sweepExpiredSent, InsiderUnavailableError, MissingProofContentError, type RequestsDeps } from "./requests";
 
 const RULES_VALUE = {
   responseWindowHours: 48,
@@ -41,7 +44,7 @@ async function makeVerifiedInsiderAndFundedSeeker(
   const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, "insider1@acme.com");
   await db.identity.markInsiderVerified(insiderProfile.id, new Date());
 
-  return { deps: { db }, seekerProfileId: seekerProfile.id, insiderProfileId: insiderProfile.id };
+  return { deps: { db, queue: createFakeQueueClient() }, seekerProfileId: seekerProfile.id, insiderProfileId: insiderProfile.id };
 }
 
 describe("sendRequest", () => {
@@ -70,7 +73,7 @@ describe("sendRequest", () => {
     // deliberately not verified
 
     await expect(
-      sendRequest({ db }, { idempotencyKey: "k3", seekerProfileId: seekerProfile.id, insiderProfileId: insiderProfile.id })
+      sendRequest({ db, queue: createFakeQueueClient() }, { idempotencyKey: "k3", seekerProfileId: seekerProfile.id, insiderProfileId: insiderProfile.id })
     ).rejects.toThrow(InsiderUnavailableError);
   });
 
@@ -87,6 +90,86 @@ describe("sendRequest", () => {
     await expect(
       sendRequest(deps, { idempotencyKey: "k5", seekerProfileId, insiderProfileId })
     ).rejects.toThrow();
+  });
+
+  it("enqueues a request.expire job with a singleton key and the configured response window", async () => {
+    const sentJobs: Array<{ queueName: string; payload: unknown; options?: { singletonKey?: string; startAfterSeconds?: number } }> = [];
+    const spyQueue: QueueClient = {
+      async start() {},
+      async stop() {},
+      async send(queueName, payload, options) {
+        sentJobs.push({ queueName, payload, options });
+        return "job-1";
+      },
+      async work() {},
+      async schedule() {},
+    };
+    const { db, seedConfig, seedCompany } = createFakeDatabase();
+    seedConfig({ key: "rules", version: 1, placeholder: true, value: RULES_VALUE });
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const seekerUser = await db.identity.findOrCreateUser("fb-eq-1", "eq1@x.com", "seeker");
+    const seekerProfile = await db.identity.createSeekerProfile(seekerUser.id, "EQ Seeker");
+    await db.ledger.postTxn({
+      idempotencyKey: "grant:eq1",
+      eventType: "credits.grant",
+      entries: [
+        { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -5 },
+        { ownerType: "seeker", ownerId: seekerProfile.id, currency: "credits", amount: 5 },
+      ],
+    });
+    const insiderUser = await db.identity.findOrCreateUser("fb-eq-2", "eq2@acme.com", "seeker");
+    const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, "eq2@acme.com");
+    await db.identity.markInsiderVerified(insiderProfile.id, new Date());
+
+    const request = await sendRequest(
+      { db, queue: spyQueue },
+      { idempotencyKey: "eq1", seekerProfileId: seekerProfile.id, insiderProfileId: insiderProfile.id }
+    );
+
+    expect(sentJobs).toHaveLength(1);
+    expect(sentJobs[0].queueName).toBe("request.expire");
+    expect(sentJobs[0].payload).toEqual({ requestId: request.id });
+    expect(sentJobs[0].options?.singletonKey).toBe(`request:${request.id}:expire`);
+    expect(sentJobs[0].options?.startAfterSeconds).toBe(RULES_VALUE.responseWindowHours * 3600);
+  });
+
+  it("still returns the created request when queue.send throws (credits are already committed)", async () => {
+    const failingQueue: QueueClient = {
+      async start() {},
+      async stop() {},
+      async send() {
+        throw new Error("pg-boss unavailable");
+      },
+      async work() {},
+      async schedule() {},
+    };
+    const { db, seedConfig, seedCompany } = createFakeDatabase();
+    seedConfig({ key: "rules", version: 1, placeholder: true, value: RULES_VALUE });
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const seekerUser = await db.identity.findOrCreateUser("fb-qf-1", "qf1@x.com", "seeker");
+    const seekerProfile = await db.identity.createSeekerProfile(seekerUser.id, "QF Seeker");
+    await db.ledger.postTxn({
+      idempotencyKey: "grant:qf1",
+      eventType: "credits.grant",
+      entries: [
+        { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -5 },
+        { ownerType: "seeker", ownerId: seekerProfile.id, currency: "credits", amount: 5 },
+      ],
+    });
+    const insiderUser = await db.identity.findOrCreateUser("fb-qf-2", "qf2@acme.com", "seeker");
+    const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, "qf2@acme.com");
+    await db.identity.markInsiderVerified(insiderProfile.id, new Date());
+
+    const request = await sendRequest(
+      { db, queue: failingQueue },
+      { idempotencyKey: "qf1", seekerProfileId: seekerProfile.id, insiderProfileId: insiderProfile.id }
+    );
+
+    expect(request.state).toBe("SENT");
+    expect(request.creditCost).toBe(3);
+    // The debit + escrow already committed in the DB transaction, independent of the failed enqueue.
+    expect(await db.ledger.getBalance("seeker", seekerProfile.id, "credits")).toBe(2);
+    expect(await db.ledger.getBalance("escrow", request.id, "credits")).toBe(3);
   });
 });
 
@@ -134,7 +217,7 @@ describe("decline", () => {
     const insiderUser = await db.identity.findOrCreateUser("fb-rv-2", "rv2@acme.com", "seeker");
     const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, "rv2@acme.com");
     await db.identity.markInsiderVerified(insiderProfile.id, new Date());
-    const deps = { db };
+    const deps = { db, queue: createFakeQueueClient() };
 
     const request = await sendRequest(deps, {
       idempotencyKey: "kv1",
@@ -206,7 +289,7 @@ describe("expire", () => {
     const insiderUser = await db.identity.findOrCreateUser("fb-rv-4", "rv4@acme.com", "seeker");
     const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, "rv4@acme.com");
     await db.identity.markInsiderVerified(insiderProfile.id, new Date());
-    const deps = { db };
+    const deps = { db, queue: createFakeQueueClient() };
 
     const request = await sendRequest(deps, {
       idempotencyKey: "kv2",
@@ -301,5 +384,107 @@ describe("submitProof", () => {
     await expect(
       submitProof(deps, { idempotencyKey: "sp4-proof-c", requestId: request.id, proofType: "text", textContent: "   " })
     ).rejects.toThrow(MissingProofContentError);
+  });
+});
+
+describe("sweepExpiredSent", () => {
+  it("expires a SENT request whose response window has passed, refunding per config", async () => {
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const request = await sendRequest(deps, { idempotencyKey: "sw1", seekerProfileId, insiderProfileId });
+    const past = new Date(Date.now() + (RULES_VALUE.responseWindowHours * 3600 + 60) * 1000);
+
+    const swept = await sweepExpiredSent(deps, past);
+
+    expect(swept.map((r) => r.id)).toContain(request.id);
+    const updated = await deps.db.requests.getById(request.id);
+    expect(updated?.state).toBe("EXPIRED");
+    // creditCost 3 (tier1), refundPercentOnExpiry 60% => round(1.8)=2 refunded on top of the 2 left after the 3-credit debit = 4.
+    // (Brief's literal test code asserted 5, i.e. a 100% refund, which contradicts RULES_VALUE.refundPercentOnExpiry=60
+    // and the already-passing "expire" describe block's identical-inputs assertion of 4 a few lines above in this same file.)
+    expect(await deps.db.ledger.getBalance("seeker", seekerProfileId, "credits")).toBe(4);
+  });
+
+  it("does not sweep a SENT request still within its response window", async () => {
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const request = await sendRequest(deps, { idempotencyKey: "sw2", seekerProfileId, insiderProfileId });
+    const soon = new Date(Date.now() + 60 * 1000);
+
+    const swept = await sweepExpiredSent(deps, soon);
+
+    expect(swept.map((r) => r.id)).not.toContain(request.id);
+    const updated = await deps.db.requests.getById(request.id);
+    expect(updated?.state).toBe("SENT");
+  });
+
+  it("does not touch a request that is no longer SENT, even if old", async () => {
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const request = await sendRequest(deps, { idempotencyKey: "sw3", seekerProfileId, insiderProfileId });
+    await accept(deps, request.id);
+    const past = new Date(Date.now() + (RULES_VALUE.responseWindowHours * 3600 + 60) * 1000);
+
+    const swept = await sweepExpiredSent(deps, past);
+
+    expect(swept.map((r) => r.id)).not.toContain(request.id);
+    const updated = await deps.db.requests.getById(request.id);
+    expect(updated?.state).toBe("ACCEPTED");
+  });
+
+  it("keeps expiring the remaining overdue requests when one of them fails partway through", async () => {
+    const { db, seedConfig, seedCompany } = createFakeDatabase();
+    seedConfig({ key: "rules", version: 1, placeholder: true, value: RULES_VALUE });
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+
+    async function makeSentRequest(tag: string) {
+      const seekerUser = await db.identity.findOrCreateUser(`fb-sw4-${tag}`, `sw4-${tag}@x.com`, "seeker");
+      const seekerProfile = await db.identity.createSeekerProfile(seekerUser.id, `SW4 ${tag}`);
+      await db.ledger.postTxn({
+        idempotencyKey: `grant:sw4-${tag}`,
+        eventType: "credits.grant",
+        entries: [
+          { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -5 },
+          { ownerType: "seeker", ownerId: seekerProfile.id, currency: "credits", amount: 5 },
+        ],
+      });
+      const insiderUser = await db.identity.findOrCreateUser(`fb-sw4-i-${tag}`, `sw4-i-${tag}@acme.com`, "seeker");
+      const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, `sw4-i-${tag}@acme.com`);
+      await db.identity.markInsiderVerified(insiderProfile.id, new Date());
+      return sendRequest(
+        { db, queue: createFakeQueueClient() },
+        { idempotencyKey: `sw4-${tag}`, seekerProfileId: seekerProfile.id, insiderProfileId: insiderProfile.id }
+      );
+    }
+
+    const failingRequest = await makeSentRequest("fail");
+    const okRequest = await makeSentRequest("ok");
+
+    // A thin wrapper around the fake db that throws only when expire() looks up
+    // the "failing" request's current state, simulating a data inconsistency on
+    // just that one row without inventing new fake-database failure-injection
+    // machinery. listByState (used to find the overdue set) is untouched, so both
+    // requests are still discovered as overdue; only the failing one errors out.
+    const flakyDb: Database = {
+      ...db,
+      requests: {
+        ...db.requests,
+        async getById(requestId: string) {
+          if (requestId === failingRequest.id) {
+            throw new Error("simulated data inconsistency");
+          }
+          return db.requests.getById(requestId);
+        },
+      },
+    };
+
+    const past = new Date(Date.now() + (RULES_VALUE.responseWindowHours * 3600 + 60) * 1000);
+    const swept = await sweepExpiredSent({ db: flakyDb, queue: createFakeQueueClient() }, past);
+
+    expect(swept.map((r) => r.id)).toContain(okRequest.id);
+    expect(swept.map((r) => r.id)).not.toContain(failingRequest.id);
+
+    const okUpdated = await db.requests.getById(okRequest.id);
+    expect(okUpdated?.state).toBe("EXPIRED");
+    // The failing request was never actually transitioned — it's still SENT in the real db.
+    const failingUpdated = await db.requests.getById(failingRequest.id);
+    expect(failingUpdated?.state).toBe("SENT");
   });
 });

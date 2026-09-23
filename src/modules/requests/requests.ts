@@ -3,10 +3,12 @@ import { RequestStateConflictError } from "../../adapters/db/types";
 import { getRulesWithVersion } from "../config/config";
 import { UnknownCompanyTierError } from "../insiders/insiders";
 import { escrowFor, platformAccount } from "../ledger/ledger";
+import type { QueueClient } from "../../jobs/queue";
 import { nextState, type RequestState } from "./state";
 
 export interface RequestsDeps {
   db: Database;
+  queue: QueueClient;
 }
 
 export class InsiderUnavailableError extends Error {
@@ -42,7 +44,7 @@ export async function sendRequest(deps: RequestsDeps, input: SendRequestInput): 
   const creditCost = rules.requestCostByTier[summary.companyTier];
   if (creditCost === undefined) throw new UnknownCompanyTierError(summary.companyTier);
 
-  return deps.db.requests.sendRequest({
+  const request = await deps.db.requests.sendRequest({
     idempotencyKey: `send:${input.idempotencyKey}`,
     seekerProfileId: input.seekerProfileId,
     insiderProfileId: input.insiderProfileId,
@@ -50,6 +52,22 @@ export async function sendRequest(deps: RequestsDeps, input: SendRequestInput): 
     creditCost,
     rulesVersion,
   });
+
+  try {
+    await deps.queue.send(
+      "request.expire",
+      { requestId: request.id },
+      { singletonKey: `request:${request.id}:expire`, startAfterSeconds: rules.responseWindowHours * 3600 }
+    );
+  } catch (err) {
+    // The DB transaction above (debit + escrow + request row) already
+    // committed — the seeker's credits are already spent. Do not fail the
+    // whole call over a lost timer enqueue; the hourly requests.sweep job is
+    // the designed compensating control for exactly this case.
+    console.error(`[requests] failed to enqueue request.expire for request ${request.id}`, err);
+  }
+
+  return request;
 }
 
 function refundEntries(
@@ -132,6 +150,26 @@ export async function expire(deps: RequestsDeps, requestId: string): Promise<Ins
     }
     throw err;
   }
+}
+
+export async function sweepExpiredSent(deps: RequestsDeps, now: Date): Promise<InsiderRequestRecord[]> {
+  const { rules } = await getRulesWithVersion(deps);
+  const deadlineMs = rules.responseWindowHours * 3600 * 1000;
+  const sentRequests = await deps.db.requests.listByState("SENT");
+  const overdue = sentRequests.filter((r) => now.getTime() - r.createdAt.getTime() >= deadlineMs);
+
+  const results: InsiderRequestRecord[] = [];
+  for (const request of overdue) {
+    try {
+      results.push(await expire(deps, request.id));
+    } catch (err) {
+      // This sweep is itself the safety net for lost per-request timers — one
+      // bad/wedged row must not abort the pass and silently skip every other
+      // overdue request behind it. Log and keep going.
+      console.error(`[requests] sweepExpiredSent failed to expire request ${request.id}`, err);
+    }
+  }
+  return results;
 }
 
 export interface SubmitProofInput {
