@@ -227,6 +227,94 @@ describe("deliverNotification", () => {
     expect(updated?.error).toContain("Brevo is down");
   });
 
+  it("marks the row failed and returns without throwing when the recipient user no longer exists", async () => {
+    const { db } = createFakeDatabase();
+    const { record } = await db.notifications.create({
+      userId: "00000000-0000-0000-0000-000000000000",
+      template: "request.accepted",
+      payload: { requestId: "r1", companyName: "Acme" },
+      idempotencyKey: "df:nouser",
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      deliverNotification(
+        { db, email: createFakeEmailSender().sender, whatsapp: createFakeWhatsAppGateway().gateway },
+        record.id
+      )
+    ).resolves.toBeUndefined();
+    const after = await db.notifications.getById(record.id);
+    expect(after?.status).toBe("failed");
+    expect(after?.error).toContain("not found");
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("marks the row failed and returns without throwing for an unknown template", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-df-tpl", "dftpl@x.com", "seeker");
+    const { record } = await db.notifications.create({
+      userId: user.id,
+      template: "not.a.template",
+      payload: {},
+      idempotencyKey: "df:tpl",
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      deliverNotification(
+        { db, email: createFakeEmailSender().sender, whatsapp: createFakeWhatsAppGateway().gateway },
+        record.id
+      )
+    ).resolves.toBeUndefined();
+    const after = await db.notifications.getById(record.id);
+    expect(after?.status).toBe("failed");
+    expect(after?.error).toContain("not.a.template");
+    errorSpy.mockRestore();
+  });
+
+  it("marks the row failed and returns without throwing when the stored payload no longer matches its template", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-df-pl", "dfpl@x.com", "seeker");
+    const { record } = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: { wrong: true },
+      idempotencyKey: "df:pl",
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      deliverNotification(
+        { db, email: createFakeEmailSender().sender, whatsapp: createFakeWhatsAppGateway().gateway },
+        record.id
+      )
+    ).resolves.toBeUndefined();
+    const after = await db.notifications.getById(record.id);
+    expect(after?.status).toBe("failed");
+    expect(after?.error).toContain("request.accepted");
+    errorSpy.mockRestore();
+  });
+
+  it("records every attempted channel's failure cause when all channels fail, and still throws", async () => {
+    const { db, user, record } = await seedPendingNotification({ phone: "+919999900001" });
+    const { gateway: whatsapp, setActiveSession, setSessionSendFailure, setTemplateSendFailure } =
+      createFakeWhatsAppGateway();
+    setActiveSession(user.id, true);
+    setSessionSendFailure("+919999900001", true);
+    setTemplateSendFailure("+919999900001", true);
+    const failingEmail = {
+      async send(): Promise<{ id: string }> {
+        throw new Error("Brevo is down");
+      },
+    };
+
+    await expect(deliverNotification({ db, email: failingEmail, whatsapp }, record.id)).rejects.toThrow();
+
+    const after = await db.notifications.getById(record.id);
+    expect(after?.status).toBe("failed");
+    expect(after?.error).toContain("whatsapp_session: Fake WhatsApp session send failed");
+    expect(after?.error).toContain("whatsapp_template: Fake WhatsApp template send failed");
+    expect(after?.error).toContain("email: Brevo is down");
+  });
+
   it("throws NotificationNotFoundError for an unknown notification id", async () => {
     const { db } = createFakeDatabase();
     const { sender: email } = createFakeEmailSender();
