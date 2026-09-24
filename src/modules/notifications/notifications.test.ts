@@ -48,11 +48,13 @@ describe("notify", () => {
     const queue = createFakeQueueClient();
     await queue.start();
     const sendSpy = vi.spyOn(queue, "send");
+    const createSpy = vi.spyOn(db.notifications, "create");
 
     await expect(
       notify({ db, queue }, user.id, "request.accepted", { requestId: "r1" }) // missing companyName
     ).rejects.toThrow();
     expect(sendSpy).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -94,6 +96,41 @@ describe("deliverNotification", () => {
     const updated = await db.notifications.getById(record.id);
     expect(updated?.status).toBe("sent");
     expect(updated?.channel).toBe("whatsapp_template");
+  });
+
+  it("falls back to a WhatsApp template message when the session send fails", async () => {
+    const { db, user, record } = await seedPendingNotification({ phone: "+911111111111" });
+    const { sender: email, sent } = createFakeEmailSender();
+    const { gateway: whatsapp, setActiveSession, setSessionSendFailure, sentSessionMessages, sentTemplateMessages } =
+      createFakeWhatsAppGateway();
+    setActiveSession(user.id, true);
+    setSessionSendFailure("+911111111111", true);
+
+    await deliverNotification({ db, email, whatsapp }, record.id);
+
+    expect(sentSessionMessages).toHaveLength(0);
+    expect(sentTemplateMessages).toHaveLength(1);
+    expect(sent).toHaveLength(0);
+    const updated = await db.notifications.getById(record.id);
+    expect(updated?.status).toBe("sent");
+    expect(updated?.channel).toBe("whatsapp_template");
+  });
+
+  it("does nothing for a notification that is already sent, so a retry never re-sends", async () => {
+    const { db, user, record } = await seedPendingNotification({ phone: "+911111111111" });
+    await db.notifications.markSent(record.id, "email", new Date("2026-01-01T00:00:00Z"));
+    const before = { ...(await db.notifications.getById(record.id)) };
+    const { sender: email, sent } = createFakeEmailSender();
+    const { gateway: whatsapp, setActiveSession, sentSessionMessages, sentTemplateMessages } =
+      createFakeWhatsAppGateway();
+    setActiveSession(user.id, true);
+
+    await deliverNotification({ db, email, whatsapp }, record.id);
+
+    expect(sent).toHaveLength(0);
+    expect(sentSessionMessages).toHaveLength(0);
+    expect(sentTemplateMessages).toHaveLength(0);
+    expect(await db.notifications.getById(record.id)).toEqual(before);
   });
 
   it("skips WhatsApp entirely and goes straight to email when the user has no phone on file", async () => {

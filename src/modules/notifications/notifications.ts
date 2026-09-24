@@ -41,6 +41,7 @@ export class NotificationNotFoundError extends Error {
 export async function deliverNotification(deps: DeliveryDeps, notificationId: string): Promise<void> {
   const record = await deps.db.notifications.getById(notificationId);
   if (!record) throw new NotificationNotFoundError(notificationId);
+  if (record.status === "sent") return;
 
   const user = await deps.db.identity.getUserById(record.userId);
   if (!user) throw new Error(`User ${record.userId} not found for notification ${notificationId}`);
