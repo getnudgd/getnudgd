@@ -269,5 +269,6 @@ export interface Database {
     getById(id: string): Promise<NotificationRecord | null>;
     markSent(id: string, channel: NotificationChannel, deliveredAt: Date): Promise<void>;
     markFailed(id: string, error: string): Promise<void>;
+    listPendingOlderThan(cutoff: Date, limit: number): Promise<NotificationRecord[]>;
   };
 }

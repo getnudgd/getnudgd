@@ -4,7 +4,7 @@ import type { QueueClient } from "./queue";
 import type { EmailSender } from "../adapters/email/types";
 import type { WhatsAppGateway } from "../adapters/whatsapp/types";
 import { expire, sweepExpiredSent, type RequestsDeps } from "../modules/requests/requests";
-import { deliverNotification, type DeliveryDeps } from "../modules/notifications/notifications";
+import { deliverNotification, sweepPendingNotifications, type DeliveryDeps } from "../modules/notifications/notifications";
 
 export interface WorkerDeps {
   db: Database;
@@ -15,6 +15,7 @@ export interface WorkerDeps {
 
 const requestExpirePayloadSchema = z.object({ requestId: z.string().min(1) });
 const notifySendPayloadSchema = z.object({ notificationId: z.string().min(1) });
+const NOTIFICATIONS_SWEEP_CRON = "*/15 * * * *";
 
 export async function startWorker(deps: WorkerDeps): Promise<void> {
   const requestsDeps: RequestsDeps = { db: deps.db, queue: deps.queue };
@@ -41,5 +42,12 @@ export async function startWorker(deps: WorkerDeps): Promise<void> {
     await deliverNotification(deliveryDeps, notificationId);
   });
 
-  console.log("[worker] started with request.expire, requests.sweep, and notify.send handlers registered");
+  await deps.queue.work("notifications.sweep", async () => {
+    await sweepPendingNotifications({ db: deps.db, queue: deps.queue }, new Date());
+  });
+  await deps.queue.schedule("notifications.sweep", NOTIFICATIONS_SWEEP_CRON, {});
+
+  console.log(
+    "[worker] started with request.expire, requests.sweep, notify.send, and notifications.sweep handlers registered"
+  );
 }

@@ -4,7 +4,13 @@ import { createFakeQueueClient } from "../../jobs/queue.fake";
 import { createFakeEmailSender } from "../../adapters/email/fake";
 import { createFakeWhatsAppGateway } from "../../adapters/whatsapp/fake";
 import type { QueueClient } from "../../jobs/queue";
-import { notify, deliverNotification, NotificationNotFoundError } from "./notifications";
+import {
+  notify,
+  deliverNotification,
+  sweepPendingNotifications,
+  PENDING_SWEEP_AGE_MS,
+  NotificationNotFoundError,
+} from "./notifications";
 
 describe("notify", () => {
   it("creates a pending notification row and enqueues notify.send with a singleton key and retry options", async () => {
@@ -226,5 +232,77 @@ describe("deliverNotification", () => {
     const { sender: email } = createFakeEmailSender();
     const { gateway: whatsapp } = createFakeWhatsAppGateway();
     await expect(deliverNotification({ db, email, whatsapp }, "nope")).rejects.toThrow(NotificationNotFoundError);
+  });
+});
+
+describe("sweepPendingNotifications", () => {
+  function makeSpyQueue(failFor?: (notificationId: string) => boolean) {
+    const sent: Array<{ notificationId: string; options?: { singletonKey?: string; retryLimit?: number; retryBackoff?: boolean } }> = [];
+    const queue: QueueClient = {
+      async start() {},
+      async stop() {},
+      async send(_queueName, payload, options) {
+        const { notificationId } = payload as { notificationId: string };
+        if (failFor?.(notificationId)) throw new Error("queue down");
+        sent.push({ notificationId, options });
+        return "job";
+      },
+      async work() {},
+      async schedule() {},
+    };
+    return { queue, sent };
+  }
+
+  it("re-enqueues pending rows older than the sweep age with the standard singleton key and retry options", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-sw-1", "sw1@x.com", "seeker");
+    const { record } = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "sw:1" });
+    const { queue, sent } = makeSpyQueue();
+
+    const count = await sweepPendingNotifications({ db, queue }, new Date(Date.now() + PENDING_SWEEP_AGE_MS + 1000));
+
+    expect(count).toBe(1);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].notificationId).toBe(record.id);
+    expect(sent[0].options?.singletonKey).toBe(`notify:${record.id}`);
+    expect(sent[0].options?.retryLimit).toBe(3);
+    expect(sent[0].options?.retryBackoff).toBe(true);
+  });
+
+  it("does not touch a pending row younger than the sweep age", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-sw-2", "sw2@x.com", "seeker");
+    await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "sw:2" });
+    const { queue, sent } = makeSpyQueue();
+    expect(await sweepPendingNotifications({ db, queue }, new Date())).toBe(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("does not re-enqueue rows that are already sent or failed", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-sw-3", "sw3@x.com", "seeker");
+    const s = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "sw:3s" });
+    const f = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "sw:3f" });
+    await db.notifications.markSent(s.record.id, "email", new Date());
+    await db.notifications.markFailed(f.record.id, "boom");
+    const { queue, sent } = makeSpyQueue();
+    expect(await sweepPendingNotifications({ db, queue }, new Date(Date.now() + PENDING_SWEEP_AGE_MS + 1000))).toBe(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("keeps sweeping the remaining rows when the queue fails for one of them", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-sw-4", "sw4@x.com", "seeker");
+    const first = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "sw:4a" });
+    const second = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "sw:4b" });
+    const { queue, sent } = makeSpyQueue((id) => id === first.record.id);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const count = await sweepPendingNotifications({ db, queue }, new Date(Date.now() + PENDING_SWEEP_AGE_MS + 1000));
+
+    expect(count).toBe(1);
+    expect(sent.map((s) => s.notificationId)).toEqual([second.record.id]);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

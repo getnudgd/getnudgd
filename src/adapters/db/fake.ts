@@ -424,6 +424,12 @@ export function createFakeDatabase(): {
         record.status = "failed";
         record.error = error;
       },
+      async listPendingOlderThan(cutoff, limit) {
+        return notificationRows
+          .filter((n) => n.status === "pending" && n.createdAt.getTime() < cutoff.getTime())
+          .sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime())
+          .slice(0, limit);
+      },
     },
   };
 

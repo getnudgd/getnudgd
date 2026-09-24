@@ -26,13 +26,40 @@ export async function notify(
   });
   // A replayed event (e.g. a racing second caller of the same transition) finds
   // the row already exists; it must not enqueue a second delivery. A row whose
-  // first enqueue failed is re-enqueued by sweepPendingNotifications.
+  // first enqueue failed stays `pending` and is re-enqueued by
+  // sweepPendingNotifications once it is older than PENDING_SWEEP_AGE_MS.
   if (!created) return;
-  await deps.queue.send(
+  await enqueueDelivery(deps.queue, record.id);
+}
+
+export const PENDING_SWEEP_AGE_MS = 30 * 60 * 1000;
+export const PENDING_SWEEP_BATCH = 100;
+
+async function enqueueDelivery(queue: QueueClient, notificationId: string): Promise<void> {
+  await queue.send(
     "notify.send",
-    { notificationId: record.id },
-    { singletonKey: `notify:${record.id}`, retryLimit: 3, retryBackoff: true }
+    { notificationId },
+    { singletonKey: `notify:${notificationId}`, retryLimit: 3, retryBackoff: true }
   );
+}
+
+// Re-enqueues delivery for rows still `pending` after PENDING_SWEEP_AGE_MS: the
+// row was written but queue.send failed (or the job was lost). Safe to run
+// repeatedly: deliverNotification skips rows that are already `sent`, and the
+// age gate keeps this away from rows whose first job is still running/retrying.
+export async function sweepPendingNotifications(deps: NotifyDeps, now: Date): Promise<number> {
+  const cutoff = new Date(now.getTime() - PENDING_SWEEP_AGE_MS);
+  const stale = await deps.db.notifications.listPendingOlderThan(cutoff, PENDING_SWEEP_BATCH);
+  let requeued = 0;
+  for (const record of stale) {
+    try {
+      await enqueueDelivery(deps.queue, record.id);
+      requeued++;
+    } catch (err) {
+      console.error(`[notifications] failed to re-enqueue pending notification ${record.id}`, err);
+    }
+  }
+  return requeued;
 }
 
 export interface DeliveryDeps {

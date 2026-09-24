@@ -781,4 +781,20 @@ describe("createFakeDatabase notifications", () => {
     expect(second.record.id).toBe(first.record.id);
     expect(second.record.payload).toEqual({ a: 1 });
   });
+
+  it("listPendingOlderThan returns only pending rows created before the cutoff, oldest first, up to the limit", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-lp-1", "lp1@x.com", "seeker");
+    const a = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "lp:a" });
+    const b = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "lp:b" });
+    const c = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "lp:c" });
+    await db.notifications.markSent(b.record.id, "email", new Date());
+    const future = new Date(Date.now() + 60_000);
+    const past = new Date(Date.now() - 60_000);
+
+    const all = await db.notifications.listPendingOlderThan(future, 10);
+    expect(all.map((n) => n.id)).toEqual([a.record.id, c.record.id]);
+    expect(await db.notifications.listPendingOlderThan(past, 10)).toEqual([]);
+    expect((await db.notifications.listPendingOlderThan(future, 1)).map((n) => n.id)).toEqual([a.record.id]);
+  });
 });

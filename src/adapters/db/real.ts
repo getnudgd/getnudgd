@@ -1,4 +1,4 @@
-import { eq, and, sum, isNull, isNotNull, gt, desc } from "drizzle-orm";
+import { eq, and, sum, isNull, isNotNull, gt, lt, asc, desc } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
   ledgerAccounts,
@@ -573,6 +573,15 @@ export function createRealDatabase(db: NodePgDatabase): Database {
       },
       async markFailed(id, error) {
         await db.update(notifications).set({ status: "failed", error }).where(eq(notifications.id, id));
+      },
+      async listPendingOlderThan(cutoff, limit) {
+        const rows = await db
+          .select()
+          .from(notifications)
+          .where(and(eq(notifications.status, "pending"), lt(notifications.createdAt, cutoff)))
+          .orderBy(asc(notifications.createdAt))
+          .limit(limit);
+        return rows as NotificationRecord[];
       },
     },
   };
