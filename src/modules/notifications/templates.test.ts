@@ -104,6 +104,40 @@ describe("templates", () => {
     expect(email.html).toContain("&quot;");
   });
 
+  it("escapes companyName in the seeker-audience branch of proof.verified email", () => {
+    const email = templates["proof.verified"].renderEmail({
+      requestId: "r1",
+      companyName: '<b>&"\'</b>',
+      audience: "seeker" as const,
+    });
+    expect(email.html).not.toContain("<b>");
+    expect(email.html).toContain("&lt;b&gt;");
+    expect(email.html).toContain("&amp;");
+    expect(email.html).toContain("&quot;");
+    expect(email.html).toContain("&#39;");
+  });
+
+  it("keeps email subjects as plain text (no HTML entities) while the body stays escaped", () => {
+    const insider = templates["proof.verified"].renderEmail({
+      requestId: "r1",
+      companyName: "Acme",
+      audience: "insider" as const,
+      seekerName: "O'Brien & <Sons>",
+    });
+    expect(insider.subject).toContain("O'Brien & <Sons>");
+    expect(insider.subject).not.toMatch(/&(amp|lt|gt|quot|#39);/);
+    expect(insider.html).toContain("O&#39;Brien &amp; &lt;Sons&gt;");
+
+    const rejected = templates["proof.rejected"].renderEmail({
+      requestId: "r1",
+      seekerName: "O'Brien & <Sons>",
+      reason: "Unreadable",
+    });
+    expect(rejected.subject).toContain("O'Brien & <Sons>");
+    expect(rejected.subject).not.toMatch(/&(amp|lt|gt|quot|#39);/);
+    expect(rejected.html).toContain("O&#39;Brien &amp; &lt;Sons&gt;");
+  });
+
   it("does NOT escape HTML special characters in WhatsApp text output", () => {
     const evilPayload = { requestId: "r1", companyName: '<b>&"\'</b>', refundedCredits: 1 };
     const whatsappText = templates["request.declined"].renderWhatsAppText(evilPayload);

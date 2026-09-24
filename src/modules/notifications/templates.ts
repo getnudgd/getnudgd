@@ -131,7 +131,7 @@ export const templates: Record<TemplateName, TemplateDefinition> = {
       const payload = proofVerifiedPayloadSchema.parse(raw);
       if (payload.audience === "insider") {
         return {
-          subject: `You vouched for ${escapeHtml(payload.seekerName ?? "a Seeker")} — verified!`,
+          subject: `You vouched for ${payload.seekerName ?? "a Seeker"} — verified!`,
           html: `<p>Your vouch for ${escapeHtml(payload.seekerName ?? "the Seeker")} at ${escapeHtml(payload.companyName)} has been verified on ${brand.name}. Your Insider Rewards will follow once processed.</p>`,
         };
       }
@@ -162,7 +162,7 @@ export const templates: Record<TemplateName, TemplateDefinition> = {
     renderEmail(raw) {
       const payload = proofRejectedPayloadSchema.parse(raw);
       return {
-        subject: `Your proof for ${escapeHtml(payload.seekerName)} needs another look`,
+        subject: `Your proof for ${payload.seekerName} needs another look`,
         html: `<p>Your submitted proof for ${escapeHtml(payload.seekerName)} on ${brand.name} was not accepted: ${escapeHtml(payload.reason)}. Please resubmit.</p>`,
       };
     },
