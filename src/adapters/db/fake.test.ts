@@ -186,6 +186,27 @@ describe("createFakeDatabase identity", () => {
     const beta = seedCompany({ name: "Beta", tier: "tier2" }, ["beta.com"]);
     await expect(db.identity.updateInsiderProfileCompany("nope", beta.id, "x@beta.com")).rejects.toThrow();
   });
+
+  it("gets a seeker profile by id, and returns null when not found", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-gsp1", "gsp1@x.com", "seeker");
+    const profile = await db.identity.createSeekerProfile(user.id, "Get Seeker Profile");
+    expect((await db.identity.getSeekerProfileById(profile.id))?.fullName).toBe("Get Seeker Profile");
+    expect(await db.identity.getSeekerProfileById("nope")).toBeNull();
+  });
+
+  it("sets a user's phone, defaulting to null for a newly created user", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-phone1", "phone1@x.com", "seeker");
+    expect(user.phone).toBeNull();
+    await db.identity.setUserPhone(user.id, "+911234567890");
+    expect((await db.identity.getUserById(user.id))?.phone).toBe("+911234567890");
+  });
+
+  it("throws when setting phone for a nonexistent user", async () => {
+    const { db } = createFakeDatabase();
+    await expect(db.identity.setUserPhone("nope", "+911234567890")).rejects.toThrow();
+  });
 });
 
 describe("createFakeDatabase resumes", () => {
@@ -671,5 +692,48 @@ describe("createFakeDatabase requests proof and admin review", () => {
       // plan already call applyTransition this way; confirm it still holds here.
     });
     expect(await db.requests.listAuditLogByTarget("insider_request", requestId)).toHaveLength(0);
+  });
+});
+
+describe("createFakeDatabase notifications", () => {
+  it("creates a pending notification with no channel and no deliveredAt", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-notif1", "notif1@x.com", "seeker");
+    const record = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: { requestId: "r1", companyName: "Acme" },
+    });
+    expect(record.status).toBe("pending");
+    expect(record.channel).toBeNull();
+    expect(record.deliveredAt).toBeNull();
+    expect(record.error).toBeNull();
+  });
+
+  it("getById returns null for an unknown id", async () => {
+    const { db } = createFakeDatabase();
+    expect(await db.notifications.getById("nope")).toBeNull();
+  });
+
+  it("markSent sets status, channel, and deliveredAt", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-notif2", "notif2@x.com", "seeker");
+    const record = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {} });
+    const when = new Date();
+    await db.notifications.markSent(record.id, "email", when);
+    const updated = await db.notifications.getById(record.id);
+    expect(updated?.status).toBe("sent");
+    expect(updated?.channel).toBe("email");
+    expect(updated?.deliveredAt).toEqual(when);
+  });
+
+  it("markFailed sets status and error", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-notif3", "notif3@x.com", "seeker");
+    const record = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {} });
+    await db.notifications.markFailed(record.id, "all channels failed");
+    const updated = await db.notifications.getById(record.id);
+    expect(updated?.status).toBe("failed");
+    expect(updated?.error).toBe("all channels failed");
   });
 });

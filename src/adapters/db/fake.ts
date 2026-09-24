@@ -21,6 +21,8 @@ import {
   RequestStateConflictError,
   VerificationProofRecord,
   AdminAuditLogRecord,
+  NotificationRecord,
+  NotificationChannel,
 } from "./types";
 
 function assertZeroSum(entries: PostLedgerTxnInput["entries"]): void {
@@ -50,6 +52,7 @@ export function createFakeDatabase(): {
   const requestEventRows: RequestEventRecord[] = [];
   const verificationProofRows: VerificationProofRecord[] = [];
   const adminAuditLogRows: AdminAuditLogRecord[] = [];
+  const notificationRows: NotificationRecord[] = [];
   let nextId = 1;
   const genId = () => `fake-${nextId++}`;
 
@@ -117,7 +120,7 @@ export function createFakeDatabase(): {
       async findOrCreateUser(firebaseUid: string, email: string, role: Role) {
         let user = users.find((u) => u.firebaseUid === firebaseUid);
         if (!user) {
-          user = { id: genId(), firebaseUid, email, role, createdAt: new Date() };
+          user = { id: genId(), firebaseUid, email, phone: null, role, createdAt: new Date() };
           users.push(user);
         }
         return user;
@@ -169,11 +172,19 @@ export function createFakeDatabase(): {
       async getInsiderProfileById(insiderProfileId: string) {
         return insiderProfiles.find((p) => p.id === insiderProfileId) ?? null;
       },
+      async getSeekerProfileById(seekerProfileId: string) {
+        return seekerProfiles.find((p) => p.id === seekerProfileId) ?? null;
+      },
       async setUserRole(userId: string, role: Role) {
         const user = users.find((u) => u.id === userId);
         if (!user) throw new Error(`User ${userId} not found`);
         user.role = role;
         return user;
+      },
+      async setUserPhone(userId: string, phone: string) {
+        const user = users.find((u) => u.id === userId);
+        if (!user) throw new Error(`User ${userId} not found`);
+        user.phone = phone;
       },
     },
     resumes: {
@@ -377,6 +388,39 @@ export function createFakeDatabase(): {
       },
       async listAuditLogByTarget(targetType, targetId) {
         return adminAuditLogRows.filter((r) => r.targetType === targetType && r.targetId === targetId);
+      },
+    },
+    notifications: {
+      async create(input) {
+        const record: NotificationRecord = {
+          id: genId(),
+          userId: input.userId,
+          template: input.template,
+          payload: input.payload,
+          status: "pending",
+          channel: null,
+          deliveredAt: null,
+          error: null,
+          createdAt: new Date(),
+        };
+        notificationRows.push(record);
+        return record;
+      },
+      async getById(id) {
+        return notificationRows.find((n) => n.id === id) ?? null;
+      },
+      async markSent(id, channel, deliveredAt) {
+        const record = notificationRows.find((n) => n.id === id);
+        if (!record) throw new Error(`Notification ${id} not found`);
+        record.status = "sent";
+        record.channel = channel;
+        record.deliveredAt = deliveredAt;
+      },
+      async markFailed(id, error) {
+        const record = notificationRows.find((n) => n.id === id);
+        if (!record) throw new Error(`Notification ${id} not found`);
+        record.status = "failed";
+        record.error = error;
       },
     },
   };

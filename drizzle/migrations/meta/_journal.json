@@ -64,6 +64,13 @@
       "when": 1789841421776,
       "tag": "0008_admin_audit_log_append_only",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790271125805,
+      "tag": "0009_notifications_and_phone",
+      "breakpoints": true
     }
   ]
 }
