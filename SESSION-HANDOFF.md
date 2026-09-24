@@ -8,10 +8,10 @@ This file replaces the 2026-09-24 version, which said the notifications module w
 
 ## 0. TL;DR — where things stand
 
-- `main` has everything through **Phase 1 Timers** and the **notifications module**. The notifications merge commit is `ea8c24d` (`--no-ff`, like `phase-1-timers`). The handoff commit sits on top of it.
+- `main` has everything through **Phase 1 Timers** and the **notifications module**, plus a live-run hotfix (`1be49d3`, see §1). The notifications merge commit is `ea8c24d` (`--no-ff`, like `phase-1-timers`). The handoff commit sits on top of it.
 - **Nothing is in flight.** The `notifications-module` worktree and branch are gone. No pending worktrees.
 - **Nothing has been pushed.** `origin/main` is far behind local `main` and stays that way until Anmol says to push.
-- Verified on `main` after the merge: `npm run lint` clean (0 problems), `npm run typecheck` clean, `npm test` 45 files / 391 tests passing.
+- Verified on `main` after the merge: `npm run lint` clean (0 problems), `npm run typecheck` clean, `npm test` 46 files / 394 tests passing (after the hotfix).
 - Untracked and deliberately not committed (waiting for Anmol to say so): `PRD.md`, `TRD.md`, `USER-FLOWS.md`.
 
 **The exact next step:** start the `rewards` module (Phase 1 backend, next after notifications). Run `superpowers:brainstorming` → spec in `docs/superpowers/specs/` → plan in `docs/superpowers/plans/` → worktree → subagent-driven-development. Before brainstorming, ask Anmol for the placeholder-worthy values (tranche split, minimum redemption, PAN threshold): they live in `app_config`, never in code (AGENTS.md §0.5). Do **not** wire any real `EmailSender` or `WhatsAppGateway` until the notifications hard gate in §1 is done.
@@ -34,7 +34,9 @@ What is on `main` now:
 | `notify()` wired into accept / decline / expire (`requests.ts`) and proof verified (Insider + Seeker) / proof rejected (`admin.ts`); each call is try/catch'd so a notification failure never fails the mutation; `AdminDeps` now requires `queue` | `src/modules/requests/`, `src/modules/admin/` |
 | Worker `notify.send` handler; `Adapters.whatsapp` | `src/jobs/worker.ts`, `src/lib/adapters.impl.ts` |
 
-Migration `0009` was checked by inspection (matches `schema.ts` and the snapshot, no trigger/REVOKE on `notifications`, `db:generate` reports no changes). **It has never been applied to a live Postgres**, and the new `real.ts` methods have never run against one.
+Migration `0009` was checked by inspection (matches `schema.ts` and the snapshot, no trigger/REVOKE on `notifications`, `db:generate` reports no changes) **and applied to the dev Postgres on 2026-09-25**. A live end-to-end run (real Postgres + real pg-boss, fake email/WhatsApp) passed: accept and decline each produced a `notifications` row that went `pending` → `sent` on the `email` channel via the real worker handler, and pg-boss stored `retry_limit 3`, `retry_backoff true`, singleton key `notify:{id}`. Not covered live: the failure paths (all-channels-fail retry/backoff, already-sent skip), the WhatsApp branches, and real vendor delivery (email/WhatsApp are still fakes).
+
+**Live run found a merged regression, fixed in `1be49d3`:** Task 1 (`d9a63f8`) made `queue.real.ts` `send()` pass `retryLimit`/`retryBackoff` as keys with value `undefined`. pg-boss validates with `'retryLimit' in config`, so every send without retry options threw, and `sendRequest`'s `request.expire` job (the 48h timer) was never enqueued on a real queue (only the hourly sweep would have expired requests). Fakes and reviews missed it. `send()` now includes an option key only when set, with a unit test (mocked `PgBoss`) asserting key absence. Re-verified live: `request.expire` jobs are created with `start_after` ≈ 48h ahead.
 
 ### HARD GATE before any real EmailSender / WhatsAppGateway is wired
 
@@ -148,6 +150,8 @@ Ledger rule: each plan's ledger is `.superpowers/sdd/<plan-basename>/progress.md
 ---
 
 ## 7. Lessons that cost time — don't repeat
+
+- **Fakes and mock-based tests can't see vendor-library validation.** A bug in the real pg-boss adapter (undefined-valued option keys) passed 391 tests, two reviews and a final review, and only showed up when a send was run against real Postgres + pg-boss. Any change to `queue.real.ts` / `db/real.ts` needs one live run before merge: `docker compose -f infra/compose.dev.yml up -d postgres`, `npm run db:migrate`, `npm run db:seed`, then a small tsx script driving real db + real queue (`startWorker` + `sendRequest`/`accept`/`decline`) and checking rows and `pgboss.job`. Put that in the plan's verification step, not after the merge. Still missing: an automated integration suite for this (AGENTS.md §3.8 contract tests).
 
 - `.env.local` is missing in fresh worktrees.
 - Merging a worktree can double test counts if `.worktrees/**` isn't excluded from `vitest.config.ts` and `eslint.config.mjs` (it is now).
