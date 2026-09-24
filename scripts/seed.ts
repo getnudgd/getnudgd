@@ -23,6 +23,14 @@ const PLACEHOLDER_RULES = {
   },
 };
 
+// Rewards economics are founder-owned placeholders (spec 2026-09-25). New rules VERSION so
+// existing version-1 rows (and requests stamped with them) are untouched.
+const PLACEHOLDER_RULES_V2 = {
+  ...PLACEHOLDER_RULES,
+  version: 2,
+  value: { ...PLACEHOLDER_RULES.value, pointsPerCredit: 40, paisePerPoint: 100, giftCardBrands: ["amazon", "flipkart"] },
+};
+
 const PLACEHOLDER_PACKS = {
   key: "credit_packs",
   version: 1,
@@ -45,8 +53,9 @@ async function main() {
   const pool = new Pool({ connectionString: env.DATABASE_URL });
   const db = drizzle(pool);
   await db.insert(appConfig).values(PLACEHOLDER_RULES).onConflictDoNothing();
+  await db.insert(appConfig).values(PLACEHOLDER_RULES_V2).onConflictDoNothing();
   await db.insert(appConfig).values(PLACEHOLDER_PACKS).onConflictDoNothing();
-  console.log("Seeded placeholder app_config (rules v1, credit_packs v1).");
+  console.log("Seeded placeholder app_config (rules v1, rules v2, credit_packs v1).");
 
   for (const company of PLACEHOLDER_COMPANIES) {
     const [inserted] = await db
