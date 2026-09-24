@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { createFakeDatabase } from "./fake";
-import { LedgerImbalanceError, InsufficientBalanceError, RequestStateConflictError } from "./types";
+import {
+  LedgerImbalanceError,
+  InsufficientBalanceError,
+  RequestStateConflictError,
+  InsufficientPointsError,
+  RedemptionAlreadyResolvedError,
+  assertSingleCurrency,
+} from "./types";
 
 describe("createFakeDatabase ledger", () => {
   it("posts a balanced transaction and reflects it in balances", async () => {
@@ -953,5 +960,344 @@ describe("createFakeDatabase rewards (tranche release)", () => {
     expect(txn.entries.length).toBeGreaterThan(0);
     expect(new Set(txn.entries.map((e) => e.currency))).toEqual(new Set(["points"]));
     expect(txn.entries.reduce((s, e) => s + e.amount, 0)).toBe(0);
+  });
+});
+
+describe("createFakeDatabase rewards (hardening)", () => {
+  type FakeDb = ReturnType<typeof createFakeDatabase>["db"];
+
+  async function makeProofPendingRequest(db: FakeDb, insiderProfileId: string): Promise<string> {
+    const user = await db.identity.findOrCreateUser(`fb-hd-${insiderProfileId}`, `hd-${insiderProfileId}@x.com`, "seeker");
+    const seekerProfile = await db.identity.createSeekerProfile(user.id, "Hardening Seeker");
+    await db.ledger.postTxn({
+      idempotencyKey: `grant:${seekerProfile.id}`,
+      eventType: "credits.grant",
+      entries: [
+        { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -5 },
+        { ownerType: "seeker", ownerId: seekerProfile.id, currency: "credits", amount: 5 },
+      ],
+    });
+    const request = await db.requests.sendRequest({
+      idempotencyKey: `send:${seekerProfile.id}`,
+      seekerProfileId: seekerProfile.id,
+      insiderProfileId,
+      companyId: "company-x",
+      creditCost: 3,
+      rulesVersion: 1,
+    });
+    await db.requests.applyTransition({
+      idempotencyKey: `request:${request.id}:accept`,
+      requestId: request.id,
+      event: "accept",
+      fromState: "SENT",
+      toState: "ACCEPTED",
+      ledgerEntries: [],
+      ledgerEventType: "request.accept",
+    });
+    await db.requests.submitProof({
+      idempotencyKey: `request:${request.id}:proof`,
+      requestId: request.id,
+      fromState: "ACCEPTED",
+      toState: "PROOF_PENDING",
+      proofType: "text",
+      textContent: "proof",
+    });
+    return request.id;
+  }
+
+  it("assertSingleCurrency throws when entries mix currencies and accepts a single currency", () => {
+    expect(() =>
+      assertSingleCurrency([
+        { ownerType: "platform", ownerId: "platform", currency: "points", amount: -1 },
+        { ownerType: "insider", ownerId: "i1", currency: "points", amount: 1 },
+        { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -1 },
+        { ownerType: "seeker", ownerId: "s1", currency: "credits", amount: 1 },
+      ])
+    ).toThrow();
+    expect(() =>
+      assertSingleCurrency([
+        { ownerType: "platform", ownerId: "platform", currency: "points", amount: -1 },
+        { ownerType: "insider", ownerId: "i1", currency: "points", amount: 1 },
+      ])
+    ).not.toThrow();
+  });
+
+  it("applyTransition rejects a trancheRelease for a different insider than the request's; nothing changes", async () => {
+    const { db } = createFakeDatabase();
+    const requestId = await makeProofPendingRequest(db, "ins-a");
+    await expect(
+      db.requests.applyTransition({
+        idempotencyKey: `request:${requestId}:verify`,
+        requestId,
+        event: "verify",
+        fromState: "PROOF_PENDING",
+        toState: "SUBMITTED",
+        ledgerEntries: [],
+        ledgerEventType: "request.verify",
+        trancheRelease: { insiderProfileId: "ins-b", tranche: 1, points: 70 },
+      })
+    ).rejects.toThrow();
+    expect((await db.requests.getById(requestId))?.state).toBe("PROOF_PENDING");
+    expect(await db.rewards.listRewards("ins-a")).toHaveLength(0);
+    expect(await db.rewards.listRewards("ins-b")).toHaveLength(0);
+    expect(await db.ledger.getBalance("insider", "ins-b", "points")).toBe(0);
+  });
+
+  it("releaseTranche rejects non-integer points and tranches outside {1,2}", async () => {
+    const { db } = createFakeDatabase();
+    await expect(db.rewards.releaseTranche({ requestId: "r-h1", insiderProfileId: "ins-h", tranche: 1, points: 1.5 })).rejects.toThrow();
+    await expect(
+      db.rewards.releaseTranche({ requestId: "r-h1", insiderProfileId: "ins-h", tranche: 3 as unknown as 1, points: 10 })
+    ).rejects.toThrow();
+    await expect(
+      db.rewards.releaseTranche({ requestId: "r-h1", insiderProfileId: "ins-h", tranche: 0 as unknown as 1, points: 10 })
+    ).rejects.toThrow();
+    expect(await db.rewards.listRewards("ins-h")).toHaveLength(0);
+    expect(await db.ledger.getBalance("insider", "ins-h", "points")).toBe(0);
+  });
+});
+
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+describe("createFakeDatabase rewards (redemptions)", () => {
+  type FakeDb = ReturnType<typeof createFakeDatabase>["db"];
+
+  async function fund(db: FakeDb, insiderProfileId: string, first = 60, second = 60): Promise<void> {
+    await db.rewards.releaseTranche({ requestId: `seed-${insiderProfileId}`, insiderProfileId, tranche: 1, points: first });
+    await db.rewards.releaseTranche({ requestId: `seed-${insiderProfileId}`, insiderProfileId, tranche: 2, points: second });
+  }
+
+  const base = { brand: "Amazon", denominationPaise: 50000, vendor: "manual" };
+
+  it("createRedemption debits the insider and credits the redemption escrow", async () => {
+    const { db } = createFakeDatabase();
+    await fund(db, "ins-1");
+    const { redemption, created } = await db.rewards.createRedemption({ idempotencyKey: "k1", insiderProfileId: "ins-1", points: 100, ...base });
+
+    expect(created).toBe(true);
+    expect(redemption).toMatchObject({
+      insiderProfileId: "ins-1",
+      points: 100,
+      brand: "Amazon",
+      denominationPaise: 50000,
+      vendor: "manual",
+      vendorRef: null,
+      status: "pending",
+      rejectReason: null,
+      idempotencyKey: "k1",
+      resolvedAt: null,
+    });
+    expect(redemption.createdAt).toBeInstanceOf(Date);
+    expect(await db.ledger.getBalance("insider", "ins-1", "points")).toBe(20);
+    expect(await db.ledger.getBalance("escrow", redemption.id, "points")).toBe(100);
+    expect(await db.rewards.getRedemptionById(redemption.id)).toEqual(redemption);
+  });
+
+  it("replay with the same key returns the existing row and does not debit again", async () => {
+    const { db } = createFakeDatabase();
+    await fund(db, "ins-2");
+    const first = await db.rewards.createRedemption({ idempotencyKey: "k2", insiderProfileId: "ins-2", points: 50, ...base });
+    const again = await db.rewards.createRedemption({ idempotencyKey: "k2", insiderProfileId: "ins-2", points: 50, ...base });
+    expect(again.created).toBe(false);
+    expect(again.redemption.id).toBe(first.redemption.id);
+    expect(await db.ledger.getBalance("insider", "ins-2", "points")).toBe(70);
+    expect(await db.rewards.listRedemptions({ insiderProfileId: "ins-2" })).toHaveLength(1);
+  });
+
+  it("rejects overspend and invalid points; nothing is posted", async () => {
+    const { db } = createFakeDatabase();
+    await fund(db, "ins-3");
+    await expect(
+      db.rewards.createRedemption({ idempotencyKey: "k3", insiderProfileId: "ins-3", points: 121, ...base })
+    ).rejects.toThrow(InsufficientPointsError);
+    await expect(
+      db.rewards.createRedemption({ idempotencyKey: "k3b", insiderProfileId: "ins-none", points: 1, ...base })
+    ).rejects.toThrow(InsufficientPointsError);
+    for (const points of [0, -5, 1.5]) {
+      await expect(
+        db.rewards.createRedemption({ idempotencyKey: `k3-${points}`, insiderProfileId: "ins-3", points, ...base })
+      ).rejects.toThrow();
+    }
+    expect(await db.ledger.getBalance("insider", "ins-3", "points")).toBe(120);
+    expect(await db.rewards.listRedemptions()).toHaveLength(0);
+  });
+
+  it("two sequential redemptions exceeding the balance: the second fails and balance never goes negative", async () => {
+    const { db } = createFakeDatabase();
+    await fund(db, "ins-4");
+    await db.rewards.createRedemption({ idempotencyKey: "k4a", insiderProfileId: "ins-4", points: 80, ...base });
+    await expect(
+      db.rewards.createRedemption({ idempotencyKey: "k4b", insiderProfileId: "ins-4", points: 80, ...base })
+    ).rejects.toThrow(InsufficientPointsError);
+    expect(await db.ledger.getBalance("insider", "ins-4", "points")).toBe(40);
+    expect(await db.rewards.listRedemptions({ insiderProfileId: "ins-4" })).toHaveLength(1);
+  });
+
+  it("resolveRedemption(fulfilled) moves escrow to the platform and records vendorRef, resolvedAt and audit", async () => {
+    const { db } = createFakeDatabase();
+    await fund(db, "ins-5");
+    const { redemption } = await db.rewards.createRedemption({ idempotencyKey: "k5", insiderProfileId: "ins-5", points: 100, ...base });
+    const platformBefore = await db.ledger.getBalance("platform", "platform", "points");
+
+    const resolved = await db.rewards.resolveRedemption({
+      redemptionId: redemption.id,
+      outcome: "fulfilled",
+      vendorRef: "GC-123",
+      adminAudit: { adminUserId: "admin-1", action: "redemption.fulfil", targetType: "reward_redemption", targetId: redemption.id },
+    });
+
+    expect(resolved).toMatchObject({ id: redemption.id, status: "fulfilled", vendorRef: "GC-123" });
+    expect(resolved.resolvedAt).toBeInstanceOf(Date);
+    expect(await db.ledger.getBalance("escrow", redemption.id, "points")).toBe(0);
+    expect(await db.ledger.getBalance("insider", "ins-5", "points")).toBe(20);
+    expect(await db.ledger.getBalance("platform", "platform", "points")).toBe(platformBefore + 100);
+    const audit = await db.requests.listAuditLogByTarget("reward_redemption", redemption.id);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ adminUserId: "admin-1", action: "redemption.fulfil" });
+  });
+
+  it("resolveRedemption(rejected) returns points to the insider and saves the reason; a missing reason changes nothing", async () => {
+    const { db } = createFakeDatabase();
+    await fund(db, "ins-6");
+    const { redemption } = await db.rewards.createRedemption({ idempotencyKey: "k6", insiderProfileId: "ins-6", points: 100, ...base });
+
+    await expect(db.rewards.resolveRedemption({ redemptionId: redemption.id, outcome: "rejected" })).rejects.toThrow();
+    await expect(db.rewards.resolveRedemption({ redemptionId: redemption.id, outcome: "rejected", rejectReason: "  " })).rejects.toThrow();
+    expect((await db.rewards.getRedemptionById(redemption.id))?.status).toBe("pending");
+    expect(await db.ledger.getBalance("escrow", redemption.id, "points")).toBe(100);
+
+    const resolved = await db.rewards.resolveRedemption({ redemptionId: redemption.id, outcome: "rejected", rejectReason: "Invalid brand" });
+    expect(resolved).toMatchObject({ status: "rejected", rejectReason: "Invalid brand" });
+    expect(resolved.resolvedAt).toBeInstanceOf(Date);
+    expect(await db.ledger.getBalance("insider", "ins-6", "points")).toBe(120);
+    expect(await db.ledger.getBalance("escrow", redemption.id, "points")).toBe(0);
+  });
+
+  it("replay of the same outcome is a no-op; the opposite outcome or an unknown id throws", async () => {
+    const { db } = createFakeDatabase();
+    await fund(db, "ins-7");
+    const { redemption } = await db.rewards.createRedemption({ idempotencyKey: "k7", insiderProfileId: "ins-7", points: 100, ...base });
+    const audit = { adminUserId: "admin-1", action: "redemption.fulfil", targetType: "reward_redemption", targetId: redemption.id };
+
+    const first = await db.rewards.resolveRedemption({ redemptionId: redemption.id, outcome: "fulfilled", vendorRef: "V1", adminAudit: audit });
+    const replay = await db.rewards.resolveRedemption({ redemptionId: redemption.id, outcome: "fulfilled", vendorRef: "V2", adminAudit: audit });
+    expect(replay).toEqual(first);
+    expect(replay.vendorRef).toBe("V1");
+    expect(await db.requests.listAuditLogByTarget("reward_redemption", redemption.id)).toHaveLength(1);
+    expect(await db.ledger.getBalance("platform", "platform", "points")).toBe(-120 + 100);
+
+    await expect(
+      db.rewards.resolveRedemption({ redemptionId: redemption.id, outcome: "rejected", rejectReason: "late" })
+    ).rejects.toThrow(RedemptionAlreadyResolvedError);
+    await expect(db.rewards.resolveRedemption({ redemptionId: "nope", outcome: "fulfilled" })).rejects.toThrow(/not found/);
+  });
+
+  it("property: 200 random operations never break balances or the zero-sum invariant", async () => {
+    const { db } = createFakeDatabase();
+    const rand = mulberry32(20260925);
+    const insiders = ["p-1", "p-2", "p-3"];
+    const redemptionIds: string[] = [];
+    const txnKeys: string[] = [];
+    let seq = 0;
+
+    async function assertInvariants(): Promise<void> {
+      let total = await db.ledger.getBalance("platform", "platform", "points");
+      for (const id of insiders) {
+        const bal = await db.ledger.getBalance("insider", id, "points");
+        expect(bal).toBeGreaterThanOrEqual(0);
+        total += bal;
+      }
+      for (const rid of redemptionIds) {
+        const bal = await db.ledger.getBalance("escrow", rid, "points");
+        const row = await db.rewards.getRedemptionById(rid);
+        expect(bal).toBe(row?.status === "pending" ? row.points : 0);
+        total += bal;
+      }
+      expect(total).toBe(0);
+      for (const key of txnKeys) {
+        const txn = await db.ledger.postTxn({ idempotencyKey: key, eventType: "replay", entries: [] });
+        expect(txn.entries.reduce((s, e) => s + e.amount, 0)).toBe(0);
+        expect(new Set(txn.entries.map((e) => e.currency)).size).toBe(1);
+      }
+    }
+
+    for (let step = 0; step < 200; step++) {
+      const insider = insiders[Math.floor(rand() * insiders.length)];
+      const roll = rand();
+      if (roll < 0.35) {
+        const requestId = `prop-req-${seq++}`;
+        await db.rewards.releaseTranche({ requestId, insiderProfileId: insider, tranche: 1, points: 1 + Math.floor(rand() * 60) });
+        txnKeys.push(`request:${requestId}:tranche:1`);
+      } else if (roll < 0.7) {
+        try {
+          const { redemption } = await db.rewards.createRedemption({
+            idempotencyKey: `prop-red-${seq++}`,
+            insiderProfileId: insider,
+            points: 1 + Math.floor(rand() * 80),
+            ...base,
+          });
+          redemptionIds.push(redemption.id);
+          txnKeys.push(`redemption:${redemption.id}:hold`);
+        } catch (err) {
+          expect(err).toBeInstanceOf(InsufficientPointsError);
+        }
+      } else {
+        const pending = await db.rewards.listRedemptions({ status: "pending" });
+        if (pending.length > 0) {
+          const target = pending[Math.floor(rand() * pending.length)];
+          if (rand() < 0.5) {
+            await db.rewards.resolveRedemption({ redemptionId: target.id, outcome: "fulfilled", vendorRef: `v-${step}` });
+            txnKeys.push(`redemption:${target.id}:fulfil`);
+          } else {
+            await db.rewards.resolveRedemption({ redemptionId: target.id, outcome: "rejected", rejectReason: "prop" });
+            txnKeys.push(`redemption:${target.id}:reject`);
+          }
+        }
+      }
+      await assertInvariants();
+    }
+    expect(redemptionIds.length).toBeGreaterThan(5);
+  });
+
+  it("getWallet reports balance, lifetime earned and pending redemption points", async () => {
+    const { db } = createFakeDatabase();
+    await fund(db, "ins-9");
+    expect(await db.rewards.getWallet("ins-9")).toEqual({ balance: 120, lifetimeEarned: 120, pendingRedemptionPoints: 0 });
+    expect(await db.rewards.getWallet("ins-nobody")).toEqual({ balance: 0, lifetimeEarned: 0, pendingRedemptionPoints: 0 });
+
+    const a = await db.rewards.createRedemption({ idempotencyKey: "k9a", insiderProfileId: "ins-9", points: 100, ...base });
+    expect(await db.rewards.getWallet("ins-9")).toEqual({ balance: 20, lifetimeEarned: 120, pendingRedemptionPoints: 100 });
+
+    await db.rewards.resolveRedemption({ redemptionId: a.redemption.id, outcome: "fulfilled" });
+    expect(await db.rewards.getWallet("ins-9")).toEqual({ balance: 20, lifetimeEarned: 120, pendingRedemptionPoints: 0 });
+
+    const b = await db.rewards.createRedemption({ idempotencyKey: "k9b", insiderProfileId: "ins-9", points: 20, ...base });
+    await db.rewards.resolveRedemption({ redemptionId: b.redemption.id, outcome: "rejected", rejectReason: "nope" });
+    expect(await db.rewards.getWallet("ins-9")).toEqual({ balance: 20, lifetimeEarned: 120, pendingRedemptionPoints: 0 });
+  });
+
+  it("listRedemptions filters by status and by insider, newest first", async () => {
+    const { db } = createFakeDatabase();
+    await fund(db, "ins-10", 200, 200);
+    await fund(db, "ins-11", 200, 200);
+    const a = await db.rewards.createRedemption({ idempotencyKey: "k10a", insiderProfileId: "ins-10", points: 10, ...base });
+    const b = await db.rewards.createRedemption({ idempotencyKey: "k10b", insiderProfileId: "ins-10", points: 20, ...base });
+    const c = await db.rewards.createRedemption({ idempotencyKey: "k10c", insiderProfileId: "ins-11", points: 30, ...base });
+    await db.rewards.resolveRedemption({ redemptionId: a.redemption.id, outcome: "fulfilled" });
+
+    expect((await db.rewards.listRedemptions()).map((r) => r.id)).toEqual([c.redemption.id, b.redemption.id, a.redemption.id]);
+    expect((await db.rewards.listRedemptions({ insiderProfileId: "ins-10" })).map((r) => r.id)).toEqual([b.redemption.id, a.redemption.id]);
+    expect((await db.rewards.listRedemptions({ status: "pending" })).map((r) => r.id)).toEqual([c.redemption.id, b.redemption.id]);
+    expect((await db.rewards.listRedemptions({ status: "fulfilled", insiderProfileId: "ins-10" })).map((r) => r.id)).toEqual([a.redemption.id]);
+    expect(await db.rewards.getRedemptionById("missing")).toBeNull();
   });
 });

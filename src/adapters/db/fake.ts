@@ -25,6 +25,11 @@ import {
   InsiderRewardRecord,
   PostLedgerEntryInput,
   ReleaseTrancheInput,
+  RewardRedemptionRecord,
+  InsufficientPointsError,
+  RedemptionAlreadyResolvedError,
+  assertSingleCurrency,
+  assertValidTrancheInput,
 } from "./types";
 
 function assertZeroSum(entries: PostLedgerTxnInput["entries"]): void {
@@ -56,6 +61,7 @@ export function createFakeDatabase(): {
   const adminAuditLogRows: AdminAuditLogRecord[] = [];
   const notificationRows: NotificationRecord[] = [];
   const rewardRows: InsiderRewardRecord[] = [];
+  const redemptionRows: RewardRedemptionRecord[] = [];
   let nextId = 1;
   const genId = () => `fake-${nextId++}`;
 
@@ -72,6 +78,7 @@ export function createFakeDatabase(): {
     const existing = txns.find((t) => t.idempotencyKey === idempotencyKey);
     if (existing) return existing;
     assertZeroSum(entries);
+    assertSingleCurrency(entries);
     const txnId = genId();
     const built = entries.map((e) => {
       const account = findOrCreateAccount(e.ownerType, e.ownerId, e.currency);
@@ -83,7 +90,7 @@ export function createFakeDatabase(): {
   }
 
   function releaseTrancheInternal(input: ReleaseTrancheInput): InsiderRewardRecord {
-    if (input.points <= 0) throw new Error("Tranche points must be positive");
+    assertValidTrancheInput(input);
     const existing = rewardRows.find((r) => r.requestId === input.requestId && r.tranche === input.tranche);
     if (existing) return existing;
     const txn = postTxnInternal(`request:${input.requestId}:tranche:${input.tranche}`, "reward.tranche", [
@@ -101,6 +108,15 @@ export function createFakeDatabase(): {
     };
     rewardRows.push(reward);
     return reward;
+  }
+
+  function balanceOf(ownerType: LedgerOwnerType, ownerId: string, currency: LedgerCurrency): number {
+    const account = accounts.find((a) => a.ownerType === ownerType && a.ownerId === ownerId && a.currency === currency);
+    if (!account) return 0;
+    return txns
+      .flatMap((t) => t.entries)
+      .filter((e) => e.accountId === account.id)
+      .reduce((sum, e) => sum + e.amount, 0);
   }
 
   function toSearchResult(profile: InsiderProfileRecord): InsiderSearchResult | null {
@@ -334,6 +350,15 @@ export function createFakeDatabase(): {
         if (input.ledgerEntries.length > 0) {
           assertZeroSum(input.ledgerEntries);
         }
+        // Validate the tranche release before mutating anything so a bad input leaves state untouched.
+        if (input.trancheRelease && input.trancheRelease.points > 0) {
+          assertValidTrancheInput(input.trancheRelease);
+          if (input.trancheRelease.insiderProfileId !== current.insiderProfileId) {
+            throw new Error(
+              `Tranche release insider ${input.trancheRelease.insiderProfileId} does not match request ${input.requestId} insider ${current.insiderProfileId}`
+            );
+          }
+        }
         current.state = input.toState;
 
         if (input.ledgerEntries.length > 0) {
@@ -439,6 +464,90 @@ export function createFakeDatabase(): {
       async listRewards(insiderProfileId) {
         // Newest-inserted first: deterministic even when two rows share a millisecond.
         return rewardRows.filter((r) => r.insiderProfileId === insiderProfileId).reverse();
+      },
+      async createRedemption(input) {
+        if (!Number.isInteger(input.points) || input.points <= 0) throw new Error("Redemption points must be a positive integer");
+        const existing = redemptionRows.find((r) => r.idempotencyKey === input.idempotencyKey);
+        if (existing) return { redemption: existing, created: false };
+
+        const balance = balanceOf("insider", input.insiderProfileId, "points");
+        if (balance < input.points) throw new InsufficientPointsError(input.insiderProfileId, input.points, balance);
+
+        const redemption: RewardRedemptionRecord = {
+          id: genId(),
+          insiderProfileId: input.insiderProfileId,
+          points: input.points,
+          brand: input.brand,
+          denominationPaise: input.denominationPaise,
+          vendor: input.vendor,
+          vendorRef: null,
+          status: "pending",
+          rejectReason: null,
+          idempotencyKey: input.idempotencyKey,
+          createdAt: new Date(),
+          resolvedAt: null,
+        };
+        postTxnInternal(`redemption:${redemption.id}:hold`, "reward.redemption.hold", [
+          { ownerType: "insider", ownerId: input.insiderProfileId, currency: "points", amount: -input.points },
+          { ownerType: "escrow", ownerId: redemption.id, currency: "points", amount: input.points },
+        ]);
+        redemptionRows.push(redemption);
+        return { redemption, created: true };
+      },
+      async resolveRedemption(input) {
+        const redemption = redemptionRows.find((r) => r.id === input.redemptionId);
+        if (!redemption) throw new Error(`Redemption ${input.redemptionId} not found`);
+        if (redemption.status === input.outcome) return redemption;
+        if (redemption.status !== "pending") throw new RedemptionAlreadyResolvedError(redemption.id, redemption.status);
+        if (input.outcome === "rejected" && !input.rejectReason?.trim()) throw new Error("A reject reason is required");
+
+        if (input.outcome === "fulfilled") {
+          postTxnInternal(`redemption:${redemption.id}:fulfil`, "reward.redemption.fulfil", [
+            { ownerType: "escrow", ownerId: redemption.id, currency: "points", amount: -redemption.points },
+            { ownerType: "platform", ownerId: "platform", currency: "points", amount: redemption.points },
+          ]);
+          if (input.vendorRef !== undefined) redemption.vendorRef = input.vendorRef;
+        } else {
+          postTxnInternal(`redemption:${redemption.id}:reject`, "reward.redemption.reject", [
+            { ownerType: "escrow", ownerId: redemption.id, currency: "points", amount: -redemption.points },
+            { ownerType: "insider", ownerId: redemption.insiderProfileId, currency: "points", amount: redemption.points },
+          ]);
+          redemption.rejectReason = input.rejectReason ?? null;
+        }
+        redemption.status = input.outcome;
+        redemption.resolvedAt = new Date();
+
+        if (input.adminAudit) {
+          adminAuditLogRows.push({
+            id: genId(),
+            adminUserId: input.adminAudit.adminUserId,
+            action: input.adminAudit.action,
+            targetType: input.adminAudit.targetType,
+            targetId: input.adminAudit.targetId,
+            detail: input.adminAudit.detail ?? null,
+            createdAt: new Date(),
+          });
+        }
+        return redemption;
+      },
+      async getRedemptionById(id) {
+        return redemptionRows.find((r) => r.id === id) ?? null;
+      },
+      async listRedemptions(filter) {
+        // Newest-inserted first: deterministic even when rows share a millisecond.
+        return redemptionRows
+          .filter((r) => !filter?.status || r.status === filter.status)
+          .filter((r) => !filter?.insiderProfileId || r.insiderProfileId === filter.insiderProfileId)
+          .reverse();
+      },
+      async getWallet(insiderProfileId) {
+        return {
+          balance: balanceOf("insider", insiderProfileId, "points"),
+          lifetimeEarned: rewardRows.filter((r) => r.insiderProfileId === insiderProfileId).reduce((sum, r) => sum + r.points, 0),
+          pendingRedemptionPoints: redemptionRows
+            .filter((r) => r.insiderProfileId === insiderProfileId && r.status === "pending")
+            .reduce((sum, r) => sum + r.points, 0),
+        };
       },
     },
     notifications: {

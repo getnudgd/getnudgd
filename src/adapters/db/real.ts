@@ -1,4 +1,4 @@
-import { eq, and, sum, isNull, isNotNull, gt, lt, asc, desc } from "drizzle-orm";
+import { eq, and, sum, isNull, isNotNull, gt, lt, asc, desc, type SQL } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
   ledgerAccounts,
@@ -18,6 +18,7 @@ import {
   adminAuditLog,
   notifications,
   insiderRewards,
+  rewardRedemptions,
 } from "../../../drizzle/schema";
 import type {
   Database,
@@ -39,8 +40,40 @@ import type {
   InsiderRewardRecord,
   PostLedgerEntryInput,
   ReleaseTrancheInput,
+  RewardRedemptionRecord,
 } from "./types";
-import { LedgerImbalanceError, InsufficientBalanceError, RequestStateConflictError } from "./types";
+import {
+  LedgerImbalanceError,
+  InsufficientBalanceError,
+  RequestStateConflictError,
+  InsufficientPointsError,
+  RedemptionAlreadyResolvedError,
+  assertSingleCurrency,
+  assertValidTrancheInput,
+} from "./types";
+
+const REDEMPTION_IDEMPOTENCY_CONSTRAINT = "reward_redemptions_idempotency_key_uq";
+
+// Fixed ledger lock order: platform, seeker, insider, escrow (escrow always last).
+const OWNER_LOCK_ORDER: Record<LedgerOwnerType, number> = { platform: 0, seeker: 1, insider: 2, escrow: 3 };
+
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+// True when err (or a wrapped cause) is a Postgres unique violation on the redemption idempotency index.
+function isRedemptionIdempotencyViolation(err: unknown): boolean {
+  let current: unknown = err;
+  for (let depth = 0; depth < 5 && typeof current === "object" && current !== null; depth++) {
+    const e = current as { code?: unknown; constraint?: unknown; message?: unknown; cause?: unknown };
+    if (e.code === "23505") {
+      if (e.constraint === REDEMPTION_IDEMPOTENCY_CONSTRAINT) return true;
+      if (typeof e.message === "string" && e.message.includes(REDEMPTION_IDEMPOTENCY_CONSTRAINT)) return true;
+    }
+    current = e.cause;
+  }
+  return false;
+}
 
 function toLedgerAccountRecord(row: {
   id: string;
@@ -76,8 +109,14 @@ export function createRealDatabase(db: NodePgDatabase): Database {
     entries: PostLedgerEntryInput[]
   ): Promise<string> {
     assertZeroSum(entries);
+    assertSingleCurrency(entries);
+    // Lock accounts in a fixed order (platform, seeker, insider, escrow; ties by ownerId) so concurrent
+    // transactions can never deadlock on each other.
+    const ordered = [...entries].sort(
+      (a, b) => OWNER_LOCK_ORDER[a.ownerType] - OWNER_LOCK_ORDER[b.ownerType] || compareText(a.ownerId, b.ownerId)
+    );
     const [txnRow] = await tx.insert(ledgerTxns).values({ idempotencyKey, eventType }).returning();
-    for (const entry of entries) {
+    for (const entry of ordered) {
       let [account] = await tx
         .select()
         .from(ledgerAccounts)
@@ -101,7 +140,7 @@ export function createRealDatabase(db: NodePgDatabase): Database {
   }
 
   async function releaseTrancheInTx(tx: Tx, input: ReleaseTrancheInput): Promise<InsiderRewardRecord> {
-    if (input.points <= 0) throw new Error("Tranche points must be positive");
+    assertValidTrancheInput(input);
     const [existing] = await tx
       .select()
       .from(insiderRewards)
@@ -473,6 +512,15 @@ export function createRealDatabase(db: NodePgDatabase): Database {
           if (input.ledgerEntries.length > 0) {
             assertZeroSum(input.ledgerEntries);
           }
+          // The tranche must go to the insider this request is addressed to; check before any write.
+          if (input.trancheRelease && input.trancheRelease.points > 0) {
+            assertValidTrancheInput(input.trancheRelease);
+            if (input.trancheRelease.insiderProfileId !== current.insiderProfileId) {
+              throw new Error(
+                `Tranche release insider ${input.trancheRelease.insiderProfileId} does not match request ${input.requestId} insider ${current.insiderProfileId}`
+              );
+            }
+          }
 
           const [updated] = await tx
             .update(insiderRequests)
@@ -620,6 +668,166 @@ export function createRealDatabase(db: NodePgDatabase): Database {
           .where(eq(insiderRewards.insiderProfileId, insiderProfileId))
           .orderBy(desc(insiderRewards.releasedAt));
         return rows as InsiderRewardRecord[];
+      },
+      async createRedemption(input) {
+        if (!Number.isInteger(input.points) || input.points <= 0) throw new Error("Redemption points must be a positive integer");
+        try {
+          return await db.transaction(async (tx) => {
+            const [existing] = await tx
+              .select()
+              .from(rewardRedemptions)
+              .where(eq(rewardRedemptions.idempotencyKey, input.idempotencyKey));
+            if (existing) return { redemption: existing as RewardRedemptionRecord, created: false };
+
+            // Lock the insider's points account, then re-check the key: a concurrent first call with the
+            // same key may have committed while we waited, and that replay must not look like overspend.
+            const [account] = await tx
+              .select()
+              .from(ledgerAccounts)
+              .where(
+                and(
+                  eq(ledgerAccounts.ownerType, "insider"),
+                  eq(ledgerAccounts.ownerId, input.insiderProfileId),
+                  eq(ledgerAccounts.currency, "points")
+                )
+              )
+              .for("update");
+            const [existingAfterLock] = await tx
+              .select()
+              .from(rewardRedemptions)
+              .where(eq(rewardRedemptions.idempotencyKey, input.idempotencyKey));
+            if (existingAfterLock) return { redemption: existingAfterLock as RewardRedemptionRecord, created: false };
+
+            let balance = 0;
+            if (account) {
+              const [balanceRow] = await tx
+                .select({ total: sum(ledgerEntries.amount) })
+                .from(ledgerEntries)
+                .where(eq(ledgerEntries.accountId, account.id));
+              balance = Number(balanceRow?.total ?? 0);
+            }
+            if (balance < input.points) throw new InsufficientPointsError(input.insiderProfileId, input.points, balance);
+
+            const [row] = await tx
+              .insert(rewardRedemptions)
+              .values({
+                insiderProfileId: input.insiderProfileId,
+                points: input.points,
+                brand: input.brand,
+                denominationPaise: input.denominationPaise,
+                vendor: input.vendor,
+                status: "pending",
+                idempotencyKey: input.idempotencyKey,
+              })
+              .returning();
+            await postEntriesInTx(tx, `redemption:${row.id}:hold`, "reward.redemption.hold", [
+              { ownerType: "insider", ownerId: input.insiderProfileId, currency: "points", amount: -input.points },
+              { ownerType: "escrow", ownerId: row.id, currency: "points", amount: input.points },
+            ]);
+            return { redemption: row as RewardRedemptionRecord, created: true };
+          });
+        } catch (err) {
+          if (isRedemptionIdempotencyViolation(err)) {
+            const [existing] = await db
+              .select()
+              .from(rewardRedemptions)
+              .where(eq(rewardRedemptions.idempotencyKey, input.idempotencyKey));
+            if (existing) return { redemption: existing as RewardRedemptionRecord, created: false };
+          }
+          throw err;
+        }
+      },
+      async resolveRedemption(input) {
+        return db.transaction(async (tx) => {
+          // Lock order: the redemption row first, then ledger accounts (postEntriesInTx sorts them, escrow last).
+          const [redemption] = await tx
+            .select()
+            .from(rewardRedemptions)
+            .where(eq(rewardRedemptions.id, input.redemptionId))
+            .for("update");
+          if (!redemption) throw new Error(`Redemption ${input.redemptionId} not found`);
+          if (redemption.status === input.outcome) return redemption as RewardRedemptionRecord;
+          if (redemption.status !== "pending") {
+            throw new RedemptionAlreadyResolvedError(redemption.id, redemption.status as RewardRedemptionRecord["status"]);
+          }
+          const rejectReason = input.rejectReason?.trim();
+          if (input.outcome === "rejected" && !rejectReason) throw new Error("A reject reason is required");
+
+          if (input.outcome === "fulfilled") {
+            await postEntriesInTx(tx, `redemption:${redemption.id}:fulfil`, "reward.redemption.fulfil", [
+              { ownerType: "platform", ownerId: "platform", currency: "points", amount: redemption.points },
+              { ownerType: "escrow", ownerId: redemption.id, currency: "points", amount: -redemption.points },
+            ]);
+          } else {
+            await postEntriesInTx(tx, `redemption:${redemption.id}:reject`, "reward.redemption.reject", [
+              { ownerType: "insider", ownerId: redemption.insiderProfileId, currency: "points", amount: redemption.points },
+              { ownerType: "escrow", ownerId: redemption.id, currency: "points", amount: -redemption.points },
+            ]);
+          }
+
+          const [updated] = await tx
+            .update(rewardRedemptions)
+            .set({
+              status: input.outcome,
+              resolvedAt: new Date(),
+              ...(input.outcome === "fulfilled" && input.vendorRef !== undefined ? { vendorRef: input.vendorRef } : {}),
+              ...(input.outcome === "rejected" ? { rejectReason: rejectReason ?? null } : {}),
+            })
+            .where(eq(rewardRedemptions.id, redemption.id))
+            .returning();
+
+          if (input.adminAudit) {
+            await tx.insert(adminAuditLog).values({
+              adminUserId: input.adminAudit.adminUserId,
+              action: input.adminAudit.action,
+              targetType: input.adminAudit.targetType,
+              targetId: input.adminAudit.targetId,
+              detail: input.adminAudit.detail,
+            });
+          }
+          return updated as RewardRedemptionRecord;
+        });
+      },
+      async getRedemptionById(id) {
+        const [row] = await db.select().from(rewardRedemptions).where(eq(rewardRedemptions.id, id));
+        return (row as RewardRedemptionRecord) ?? null;
+      },
+      async listRedemptions(filter) {
+        const conditions: SQL[] = [];
+        if (filter?.status) conditions.push(eq(rewardRedemptions.status, filter.status));
+        if (filter?.insiderProfileId) conditions.push(eq(rewardRedemptions.insiderProfileId, filter.insiderProfileId));
+        const rows = await db
+          .select()
+          .from(rewardRedemptions)
+          .where(conditions.length > 0 ? and(...conditions) : undefined)
+          .orderBy(desc(rewardRedemptions.createdAt));
+        return rows as RewardRedemptionRecord[];
+      },
+      async getWallet(insiderProfileId) {
+        const [balanceRow] = await db
+          .select({ total: sum(ledgerEntries.amount) })
+          .from(ledgerEntries)
+          .innerJoin(ledgerAccounts, eq(ledgerEntries.accountId, ledgerAccounts.id))
+          .where(
+            and(
+              eq(ledgerAccounts.ownerType, "insider"),
+              eq(ledgerAccounts.ownerId, insiderProfileId),
+              eq(ledgerAccounts.currency, "points")
+            )
+          );
+        const [earnedRow] = await db
+          .select({ total: sum(insiderRewards.points) })
+          .from(insiderRewards)
+          .where(eq(insiderRewards.insiderProfileId, insiderProfileId));
+        const [pendingRow] = await db
+          .select({ total: sum(rewardRedemptions.points) })
+          .from(rewardRedemptions)
+          .where(and(eq(rewardRedemptions.insiderProfileId, insiderProfileId), eq(rewardRedemptions.status, "pending")));
+        return {
+          balance: Number(balanceRow?.total ?? 0),
+          lifetimeEarned: Number(earnedRow?.total ?? 0),
+          pendingRedemptionPoints: Number(pendingRow?.total ?? 0),
+        };
       },
     },
     notifications: {

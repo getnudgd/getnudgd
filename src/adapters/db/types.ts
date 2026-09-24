@@ -243,6 +243,54 @@ export interface ApplyRequestTransitionInput {
   trancheRelease?: TrancheReleaseInput;
 }
 
+export interface CreateRedemptionInput {
+  idempotencyKey: string;
+  insiderProfileId: string;
+  points: number;
+  brand: string;
+  denominationPaise: number;
+  vendor: string;
+}
+
+export interface ResolveRedemptionInput {
+  redemptionId: string;
+  outcome: "fulfilled" | "rejected";
+  vendorRef?: string;
+  rejectReason?: string;
+  adminAudit?: AdminAuditInput;
+}
+
+export interface WalletSummary {
+  balance: number;
+  lifetimeEarned: number;
+  pendingRedemptionPoints: number;
+}
+
+// A points transaction must never mix with credits: reward and redemption txns are single-currency.
+export function assertSingleCurrency(entries: readonly PostLedgerEntryInput[]): void {
+  const currencies = new Set(entries.map((e) => e.currency));
+  if (currencies.size > 1) throw new Error("Ledger transaction mixes currencies");
+}
+
+export function assertValidTrancheInput(input: { tranche: number; points: number }): void {
+  if (!Number.isInteger(input.points) || input.points <= 0) throw new Error("Tranche points must be a positive integer");
+  if (input.tranche !== 1 && input.tranche !== 2) throw new Error("Tranche must be 1 or 2");
+}
+
+export class InsufficientPointsError extends Error {
+  constructor(insiderProfileId: string, required: number, available: number) {
+    super(`Insider ${insiderProfileId} needs ${required} points but has ${available}`);
+    this.name = "InsufficientPointsError";
+  }
+}
+
+export class RedemptionAlreadyResolvedError extends Error {
+  constructor(redemptionId: string, status: RedemptionStatus) {
+    super(`Redemption ${redemptionId} is already ${status}`);
+    this.name = "RedemptionAlreadyResolvedError";
+  }
+}
+
 export class InsufficientBalanceError extends Error {
   constructor(ownerType: LedgerOwnerType, ownerId: string, currency: LedgerCurrency, required: number, available: number) {
     super(`Insufficient ${currency} balance for ${ownerType}:${ownerId} (need ${required}, have ${available})`);
@@ -305,6 +353,11 @@ export interface Database {
   rewards: {
     releaseTranche(input: ReleaseTrancheInput): Promise<InsiderRewardRecord>;
     listRewards(insiderProfileId: string): Promise<InsiderRewardRecord[]>;
+    createRedemption(input: CreateRedemptionInput): Promise<{ redemption: RewardRedemptionRecord; created: boolean }>;
+    resolveRedemption(input: ResolveRedemptionInput): Promise<RewardRedemptionRecord>;
+    getRedemptionById(id: string): Promise<RewardRedemptionRecord | null>;
+    listRedemptions(filter?: { status?: RedemptionStatus; insiderProfileId?: string }): Promise<RewardRedemptionRecord[]>;
+    getWallet(insiderProfileId: string): Promise<WalletSummary>;
   };
   notifications: {
     create(input: CreateNotificationInput): Promise<{ record: NotificationRecord; created: boolean }>;
