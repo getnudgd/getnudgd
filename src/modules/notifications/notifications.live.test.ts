@@ -52,6 +52,13 @@ describe.skipIf(!live)("notifications against real Postgres and pg-boss", () => 
     const afterFailed = await db.notifications.getById(failed.record.id);
     expect(afterFailed?.status).toBe("failed");
     expect(afterFailed?.error).toBe("all channels failed");
+
+    const retried = await db.notifications.create({ userId, template: "request.accepted", payload: {}, idempotencyKey: `live:${tag}:retried` });
+    await db.notifications.markFailed(retried.record.id, "boom");
+    await db.notifications.markSent(retried.record.id, "email", when);
+    const afterRetry = await db.notifications.getById(retried.record.id);
+    expect(afterRetry?.status).toBe("sent");
+    expect(afterRetry?.error).toBeNull();
   });
 
   it("listPendingOlderThan returns pending rows before the cutoff, oldest first, and skips sent rows", async () => {

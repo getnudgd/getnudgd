@@ -835,3 +835,20 @@ git commit -m "test(notifications): add opt-in live Postgres and pg-boss integra
 - Final whole-branch review (opus) against this plan and AGENTS.md; fix Critical/Important in one wave.
 - Update the "Final review findings and deferred follow-ups" section of the notifications plan and SESSION-HANDOFF.md §1: mark the hard gate items 1-3 done, state that a live run was performed, note the live-test command, and list what remains before real adapters (Brevo/WhatsApp real implementations, CR/LF subject stripping, fake email growth).
 - `finishing-a-development-branch`: merge with a merge commit into `main`, re-run lint/typecheck/tests on `main`, do not push, remove the worktree, delete the branch.
+
+## Final review findings and deferred follow-ups
+
+Final whole-branch review (opus): 0 Critical. Ready to merge after the small fixes in the accompanying commit (`markSent` now clears a stale error, the singleton-key limitation is documented above `enqueueDelivery`, and two test-only additions).
+
+**HARD GATE before wiring a real `EmailSender` or real `WhatsAppGateway`, or increasing worker concurrency or adding a second worker:** the `notify:{id}` singletonKey does not dedupe on pg-boss `standard` queues, so double delivery is prevented today only by a single sequential worker plus the `status === "sent"` guard in `deliverNotification`. Add either an atomic claim (`UPDATE notifications SET status='sending' WHERE id=$1 AND status IN ('pending','failed') RETURNING ...`) or a deduplicating queue policy (queue policy is fixed at queue creation, so this needs a new queue name on existing databases).
+
+**Deferred:**
+- M-2: a notification is lost if `notifications.create` fails or the process dies after the request transition commits. Fix by writing the notification row inside the `applyTransition` transaction once real adapters land.
+- M-3: if more than 100 rows stay `pending` forever, the sweep re-enqueues the same oldest 100 each run, and `listPendingOlderThan` has no supporting partial index. Add an index on `(created_at) WHERE status = 'pending'` and a per-row attempt cap.
+- Test-quality minors: the worker `notifications.sweep` test only asserts the handler resolves; the live test's `listPendingOlderThan(future, 1000)` can miss the new row on a dev DB with more than 1000 old pending rows; "skips sent rows" is not asserted in the live test; the live test has no `DATABASE_URL` guard; `queue.start()` sits outside the `try`.
+
+**Running the live test:**
+```bash
+export $(grep -v '^#' .env.local | grep -v '^$' | xargs -d '\n'); npm run db:migrate; RUN_VENDOR_TESTS=1 npx vitest run src/modules/notifications/notifications.live.test.ts
+```
+Do not export `.env.local` when running the full `npm test`: `ADAPTERS=real` makes `src/config/env.test.ts` fail.

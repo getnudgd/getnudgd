@@ -733,6 +733,23 @@ describe("createFakeDatabase notifications", () => {
     expect(updated?.deliveredAt).toEqual(when);
   });
 
+  it("markSent clears a stale error left by an earlier failure", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-notif2b", "notif2b@x.com", "seeker");
+    const { record } = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: {},
+      idempotencyKey: "test:k2b",
+    });
+    await db.notifications.markFailed(record.id, "boom");
+    await db.notifications.markSent(record.id, "email", new Date());
+    const updated = await db.notifications.getById(record.id);
+    expect(updated?.status).toBe("sent");
+    expect(updated?.channel).toBe("email");
+    expect(updated?.error).toBeNull();
+  });
+
   it("markFailed sets status and error", async () => {
     const { db } = createFakeDatabase();
     const user = await db.identity.findOrCreateUser("fb-notif3", "notif3@x.com", "seeker");

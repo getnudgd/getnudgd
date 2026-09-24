@@ -35,6 +35,11 @@ export async function notify(
 export const PENDING_SWEEP_AGE_MS = 30 * 60 * 1000;
 export const PENDING_SWEEP_BATCH = 100;
 
+// NOTE: the queue uses pg-boss's default "standard" policy, under which singletonKey is NOT a dedup
+// constraint (see queue.ts SendOptions). Double delivery is currently prevented only by a single worker
+// running one job at a time plus deliverNotification's status === "sent" guard. Before adding worker
+// concurrency or a second worker, add a real claim (atomic UPDATE ... SET status='sending' WHERE
+// status IN ('pending','failed') RETURNING) or a deduplicating queue policy.
 async function enqueueDelivery(queue: QueueClient, notificationId: string): Promise<void> {
   await queue.send(
     "notify.send",

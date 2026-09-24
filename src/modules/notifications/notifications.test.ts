@@ -181,6 +181,20 @@ describe("deliverNotification", () => {
     expect(await db.notifications.getById(record.id)).toEqual(before);
   });
 
+  it("delivers a row previously marked failed on the next call and clears its error", async () => {
+    const { db, record } = await seedPendingNotification();
+    await db.notifications.markFailed(record.id, "earlier failure");
+    const { sender: email, sent } = createFakeEmailSender();
+    const { gateway: whatsapp } = createFakeWhatsAppGateway();
+
+    await deliverNotification({ db, email, whatsapp }, record.id);
+
+    expect(sent).toHaveLength(1);
+    const updated = await db.notifications.getById(record.id);
+    expect(updated?.status).toBe("sent");
+    expect(updated?.error).toBeNull();
+  });
+
   it("skips WhatsApp entirely and goes straight to email when the user has no phone on file", async () => {
     const { db, record } = await seedPendingNotification();
     const { sender: email, sent } = createFakeEmailSender();
@@ -289,7 +303,7 @@ describe("deliverNotification", () => {
     ).resolves.toBeUndefined();
     const after = await db.notifications.getById(record.id);
     expect(after?.status).toBe("failed");
-    expect(after?.error).toContain("request.accepted");
+    expect(after?.error).toContain("no longer matches");
     errorSpy.mockRestore();
   });
 

@@ -417,6 +417,7 @@ export function createFakeDatabase(): {
         record.status = "sent";
         record.channel = channel;
         record.deliveredAt = deliveredAt;
+        record.error = null;
       },
       async markFailed(id, error) {
         const record = notificationRows.find((n) => n.id === id);

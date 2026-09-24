@@ -569,7 +569,7 @@ export function createRealDatabase(db: NodePgDatabase): Database {
         return (row as NotificationRecord) ?? null;
       },
       async markSent(id, channel, deliveredAt) {
-        await db.update(notifications).set({ status: "sent", channel, deliveredAt }).where(eq(notifications.id, id));
+        await db.update(notifications).set({ status: "sent", channel, deliveredAt, error: null }).where(eq(notifications.id, id));
       },
       async markFailed(id, error) {
         await db.update(notifications).set({ status: "failed", error }).where(eq(notifications.id, id));
