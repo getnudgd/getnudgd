@@ -1,17 +1,24 @@
 import { z } from "zod";
 import type { Database } from "../adapters/db/types";
 import type { QueueClient } from "./queue";
+import type { EmailSender } from "../adapters/email/types";
+import type { WhatsAppGateway } from "../adapters/whatsapp/types";
 import { expire, sweepExpiredSent, type RequestsDeps } from "../modules/requests/requests";
+import { deliverNotification, type DeliveryDeps } from "../modules/notifications/notifications";
 
 export interface WorkerDeps {
   db: Database;
   queue: QueueClient;
+  email: EmailSender;
+  whatsapp: WhatsAppGateway;
 }
 
 const requestExpirePayloadSchema = z.object({ requestId: z.string().min(1) });
+const notifySendPayloadSchema = z.object({ notificationId: z.string().min(1) });
 
 export async function startWorker(deps: WorkerDeps): Promise<void> {
   const requestsDeps: RequestsDeps = { db: deps.db, queue: deps.queue };
+  const deliveryDeps: DeliveryDeps = { db: deps.db, email: deps.email, whatsapp: deps.whatsapp };
 
   // Against the real pg-boss client, work()/schedule() call boss.createQueue()
   // internally, which requires the database connection to already be open —
@@ -29,5 +36,10 @@ export async function startWorker(deps: WorkerDeps): Promise<void> {
   });
   await deps.queue.schedule("requests.sweep", "0 * * * *", {});
 
-  console.log("[worker] started with request.expire and requests.sweep handlers registered");
+  await deps.queue.work("notify.send", async (payload) => {
+    const { notificationId } = notifySendPayloadSchema.parse(payload);
+    await deliverNotification(deliveryDeps, notificationId);
+  });
+
+  console.log("[worker] started with request.expire, requests.sweep, and notify.send handlers registered");
 }

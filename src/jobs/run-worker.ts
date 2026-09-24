@@ -14,9 +14,9 @@ if (process.env.NODE_ENV === "production" && env.ADAPTERS !== "real") {
   process.exit(1);
 }
 
-const { db, queue } = getAdapters();
+const { db, queue, email, whatsapp } = getAdapters();
 
-startWorker({ db, queue }).catch((err) => {
+startWorker({ db, queue, email, whatsapp }).catch((err) => {
   console.error("[worker] failed to start", err);
   process.exit(1);
 });
