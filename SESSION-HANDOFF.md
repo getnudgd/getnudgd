@@ -132,7 +132,16 @@ Every piece of backend work follows the AGENTS.md Part 6 loop:
 
 SDD scripts live at `C:\Users\dml-anmol\.claude\plugins\cache\claude-plugins-official\superpowers\6.4.1\skills\subagent-driven-development\scripts\` (`task-brief PLAN N`, `review-package PLAN BASE HEAD`, `sdd-workspace PLAN`). The version segment changes when the plugin updates; check the directory.
 
-**Model tiers (Anmol's standing preference, 2026-09-24):** implementers on **sonnet** (haiku takes more turns and saves little). Reviewers on **sonnet** for small diffs; **opus** only for the final whole-branch review and subtle-logic tasks (channel trees, concurrency, money). Always pass `model` explicitly. Hand briefs, reports and diffs over as file paths; never paste them. In fix rounds run only the covering tests, put exact instructions in the fix message (one fix, one dispatch), and keep subagent reports short (full report to a file). If a subagent stalls, check the worktree's real state and re-dispatch only what remains.
+**Model tiers and cost (Anmol's standing preference, 2026-09-25):**
+
+- Implementers on **sonnet** (haiku takes more turns and saves little). Reviewers on **sonnet** for small/mechanical diffs; **opus** only for the final whole-branch review and *subtle-logic* tasks. Always pass `model` explicitly.
+- **"Subtle" is defined, not judged per task:** opus for anything touching money, state transitions, idempotency, concurrency or message sending. Sonnet for templates, adapter fakes, wiring, docs. Write the tier for each task into the plan. Evidence (notifications plan): the opus reviews on logic-heavy tasks caught the missing already-sent guard and the replay-duplicate race; sonnet was enough for mechanical diffs.
+- Hand briefs, reports and diffs over as file paths; never paste them. No prior-task summaries in new dispatches.
+- **Put known pitfalls in the brief up front** so they never become fix rounds: escape user values in email HTML but keep subjects plain text; any message send needs an already-sent guard; every mutation that notifies must swallow notify errors and have a test proving it. Exact fix instructions shorten a round; known pitfalls in the brief prevent it.
+- **Reviewers write the full review to a file** and return only the verdict plus one-line findings (their long reports land in the controller's context too). Same for implementers: full report to a file, return status, commit, one-line test summary, concerns.
+- Fix rounds: covering tests only, full suite once before the commit; one fix, one dispatch; every fix still gets a scoped re-review (cheap tier). Batch only same-shape, low-risk edits — don't batch anything that widens the review surface (e.g. touching ledger-adjacent code).
+- **Never skip the final whole-branch review on opus.** It is the only whole-branch check.
+- If a subagent stalls, check the worktree's real state and re-dispatch only what remains. Bounded waits, no polling. Start a new session for a new feature (e.g. frontend) rather than growing this one.
 
 Ledger rule: each plan's ledger is `.superpowers/sdd/<plan-basename>/progress.md` in its worktree. A `Task N: complete` line means done — do not re-dispatch. The ledger is deleted after a clean final review.
 
