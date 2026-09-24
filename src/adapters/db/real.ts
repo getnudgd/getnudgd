@@ -17,6 +17,7 @@ import {
   verificationProofs,
   adminAuditLog,
   notifications,
+  insiderRewards,
 } from "../../../drizzle/schema";
 import type {
   Database,
@@ -35,6 +36,9 @@ import type {
   VerificationProofRecord,
   AdminAuditLogRecord,
   NotificationRecord,
+  InsiderRewardRecord,
+  PostLedgerEntryInput,
+  ReleaseTrancheInput,
 } from "./types";
 import { LedgerImbalanceError, InsufficientBalanceError, RequestStateConflictError } from "./types";
 
@@ -61,6 +65,65 @@ function assertZeroSum(entries: PostLedgerTxnInput["entries"]): void {
 }
 
 export function createRealDatabase(db: NodePgDatabase): Database {
+  type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+  // Posts a ledger transaction inside an open transaction: find-or-create each account
+  // (locking existing rows FOR UPDATE), insert the txn and its entries. Returns the txn id.
+  async function postEntriesInTx(
+    tx: Tx,
+    idempotencyKey: string,
+    eventType: string,
+    entries: PostLedgerEntryInput[]
+  ): Promise<string> {
+    assertZeroSum(entries);
+    const [txnRow] = await tx.insert(ledgerTxns).values({ idempotencyKey, eventType }).returning();
+    for (const entry of entries) {
+      let [account] = await tx
+        .select()
+        .from(ledgerAccounts)
+        .where(
+          and(
+            eq(ledgerAccounts.ownerType, entry.ownerType),
+            eq(ledgerAccounts.ownerId, entry.ownerId),
+            eq(ledgerAccounts.currency, entry.currency)
+          )
+        )
+        .for("update");
+      if (!account) {
+        [account] = await tx
+          .insert(ledgerAccounts)
+          .values({ ownerType: entry.ownerType, ownerId: entry.ownerId, currency: entry.currency })
+          .returning();
+      }
+      await tx.insert(ledgerEntries).values({ txnId: txnRow.id, accountId: account.id, currency: entry.currency, amount: entry.amount });
+    }
+    return txnRow.id;
+  }
+
+  async function releaseTrancheInTx(tx: Tx, input: ReleaseTrancheInput): Promise<InsiderRewardRecord> {
+    if (input.points <= 0) throw new Error("Tranche points must be positive");
+    const [existing] = await tx
+      .select()
+      .from(insiderRewards)
+      .where(and(eq(insiderRewards.requestId, input.requestId), eq(insiderRewards.tranche, input.tranche)));
+    if (existing) return existing as InsiderRewardRecord;
+    const ledgerTxnId = await postEntriesInTx(tx, `request:${input.requestId}:tranche:${input.tranche}`, "reward.tranche", [
+      { ownerType: "platform", ownerId: "platform", currency: "points", amount: -input.points },
+      { ownerType: "insider", ownerId: input.insiderProfileId, currency: "points", amount: input.points },
+    ]);
+    const [row] = await tx
+      .insert(insiderRewards)
+      .values({
+        requestId: input.requestId,
+        insiderProfileId: input.insiderProfileId,
+        tranche: input.tranche,
+        points: input.points,
+        ledgerTxnId,
+      })
+      .returning();
+    return row as InsiderRewardRecord;
+  }
+
   return {
     ledger: {
       async postTxn(input) {
@@ -447,6 +510,10 @@ export function createRealDatabase(db: NodePgDatabase): Database {
             }
           }
 
+          if (input.trancheRelease && input.trancheRelease.points > 0) {
+            await releaseTrancheInTx(tx, { requestId: input.requestId, ...input.trancheRelease });
+          }
+
           if (input.adminAudit) {
             await tx.insert(adminAuditLog).values({
               adminUserId: input.adminAudit.adminUserId,
@@ -540,6 +607,19 @@ export function createRealDatabase(db: NodePgDatabase): Database {
           .from(adminAuditLog)
           .where(and(eq(adminAuditLog.targetType, targetType), eq(adminAuditLog.targetId, targetId)));
         return rows as AdminAuditLogRecord[];
+      },
+    },
+    rewards: {
+      async releaseTranche(input) {
+        return db.transaction((tx) => releaseTrancheInTx(tx, input));
+      },
+      async listRewards(insiderProfileId) {
+        const rows = await db
+          .select()
+          .from(insiderRewards)
+          .where(eq(insiderRewards.insiderProfileId, insiderProfileId))
+          .orderBy(desc(insiderRewards.releasedAt));
+        return rows as InsiderRewardRecord[];
       },
     },
     notifications: {

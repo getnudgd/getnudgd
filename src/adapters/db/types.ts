@@ -194,6 +194,43 @@ export interface AdminAuditInput {
   detail?: string;
 }
 
+export type RedemptionStatus = "pending" | "fulfilled" | "rejected";
+
+export interface InsiderRewardRecord {
+  id: string;
+  requestId: string;
+  insiderProfileId: string;
+  tranche: number;
+  points: number;
+  ledgerTxnId: string;
+  releasedAt: Date;
+}
+
+export interface RewardRedemptionRecord {
+  id: string;
+  insiderProfileId: string;
+  points: number;
+  brand: string;
+  denominationPaise: number;
+  vendor: string;
+  vendorRef: string | null;
+  status: RedemptionStatus;
+  rejectReason: string | null;
+  idempotencyKey: string;
+  createdAt: Date;
+  resolvedAt: Date | null;
+}
+
+export interface TrancheReleaseInput {
+  insiderProfileId: string;
+  tranche: 1 | 2;
+  points: number;
+}
+
+export interface ReleaseTrancheInput extends TrancheReleaseInput {
+  requestId: string;
+}
+
 export interface ApplyRequestTransitionInput {
   idempotencyKey: string;
   requestId: string;
@@ -203,6 +240,7 @@ export interface ApplyRequestTransitionInput {
   ledgerEntries: PostLedgerEntryInput[];
   ledgerEventType: string;
   adminAudit?: AdminAuditInput;
+  trancheRelease?: TrancheReleaseInput;
 }
 
 export class InsufficientBalanceError extends Error {
@@ -263,6 +301,10 @@ export interface Database {
     getProofByRequestId(requestId: string): Promise<VerificationProofRecord | null>;
     listProofsByRequestId(requestId: string): Promise<VerificationProofRecord[]>;
     listAuditLogByTarget(targetType: string, targetId: string): Promise<AdminAuditLogRecord[]>;
+  };
+  rewards: {
+    releaseTranche(input: ReleaseTrancheInput): Promise<InsiderRewardRecord>;
+    listRewards(insiderProfileId: string): Promise<InsiderRewardRecord[]>;
   };
   notifications: {
     create(input: CreateNotificationInput): Promise<{ record: NotificationRecord; created: boolean }>;

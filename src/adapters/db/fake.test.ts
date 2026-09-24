@@ -815,3 +815,143 @@ describe("createFakeDatabase notifications", () => {
     expect((await db.notifications.listPendingOlderThan(future, 1)).map((n) => n.id)).toEqual([a.record.id]);
   });
 });
+
+describe("createFakeDatabase rewards (tranche release)", () => {
+  type FakeDb = ReturnType<typeof createFakeDatabase>["db"];
+
+  async function makeProofPendingRequest(db: FakeDb, insiderProfileId: string): Promise<string> {
+    const user = await db.identity.findOrCreateUser(`fb-rw-${Math.random()}`, `rw${Math.random()}@x.com`, "seeker");
+    const seekerProfile = await db.identity.createSeekerProfile(user.id, "Reward Seeker");
+    await db.ledger.postTxn({
+      idempotencyKey: `grant:${seekerProfile.id}`,
+      eventType: "credits.grant",
+      entries: [
+        { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -5 },
+        { ownerType: "seeker", ownerId: seekerProfile.id, currency: "credits", amount: 5 },
+      ],
+    });
+    const request = await db.requests.sendRequest({
+      idempotencyKey: `send:${seekerProfile.id}`,
+      seekerProfileId: seekerProfile.id,
+      insiderProfileId,
+      companyId: "company-x",
+      creditCost: 3,
+      rulesVersion: 1,
+    });
+    await db.requests.applyTransition({
+      idempotencyKey: `request:${request.id}:accept`,
+      requestId: request.id,
+      event: "accept",
+      fromState: "SENT",
+      toState: "ACCEPTED",
+      ledgerEntries: [],
+      ledgerEventType: "request.accept",
+    });
+    await db.requests.submitProof({
+      idempotencyKey: `request:${request.id}:proof`,
+      requestId: request.id,
+      fromState: "ACCEPTED",
+      toState: "PROOF_PENDING",
+      proofType: "text",
+      textContent: "proof",
+    });
+    return request.id;
+  }
+
+  it("releaseTranche posts a zero-sum points txn and returns the reward row", async () => {
+    const { db } = createFakeDatabase();
+    const reward = await db.rewards.releaseTranche({ requestId: "req-1", insiderProfileId: "ins-1", tranche: 1, points: 70 });
+
+    expect(reward).toMatchObject({ requestId: "req-1", insiderProfileId: "ins-1", tranche: 1, points: 70 });
+    expect(reward.ledgerTxnId).toBeTruthy();
+    expect(reward.releasedAt).toBeInstanceOf(Date);
+    expect(await db.ledger.getBalance("insider", "ins-1", "points")).toBe(70);
+    expect(await db.ledger.getBalance("platform", "platform", "points")).toBe(-70);
+  });
+
+  it("releaseTranche is idempotent per (requestId, tranche); tranches 1 and 2 are separate rows", async () => {
+    const { db } = createFakeDatabase();
+    const first = await db.rewards.releaseTranche({ requestId: "req-2", insiderProfileId: "ins-2", tranche: 1, points: 70 });
+    const again = await db.rewards.releaseTranche({ requestId: "req-2", insiderProfileId: "ins-2", tranche: 1, points: 70 });
+    expect(again.id).toBe(first.id);
+    expect(await db.ledger.getBalance("insider", "ins-2", "points")).toBe(70);
+
+    const second = await db.rewards.releaseTranche({ requestId: "req-2", insiderProfileId: "ins-2", tranche: 2, points: 30 });
+    expect(second.id).not.toBe(first.id);
+    expect(await db.ledger.getBalance("insider", "ins-2", "points")).toBe(100);
+    expect(await db.rewards.listRewards("ins-2")).toHaveLength(2);
+  });
+
+  it("releaseTranche rejects non-positive points", async () => {
+    const { db } = createFakeDatabase();
+    await expect(db.rewards.releaseTranche({ requestId: "req-3", insiderProfileId: "ins-3", tranche: 1, points: 0 })).rejects.toThrow();
+    await expect(db.rewards.releaseTranche({ requestId: "req-3", insiderProfileId: "ins-3", tranche: 1, points: -5 })).rejects.toThrow();
+    expect(await db.rewards.listRewards("ins-3")).toHaveLength(0);
+  });
+
+  it("listRewards returns newest first and only for that insider", async () => {
+    const { db } = createFakeDatabase();
+    const a = await db.rewards.releaseTranche({ requestId: "req-4", insiderProfileId: "ins-4", tranche: 1, points: 10 });
+    const b = await db.rewards.releaseTranche({ requestId: "req-5", insiderProfileId: "ins-4", tranche: 1, points: 20 });
+    await db.rewards.releaseTranche({ requestId: "req-6", insiderProfileId: "ins-other", tranche: 1, points: 30 });
+
+    const rows = await db.rewards.listRewards("ins-4");
+    expect(rows.map((r) => r.id)).toEqual([b.id, a.id]);
+  });
+
+  it("applyTransition with trancheRelease commits the state change and the reward together; replay is a no-op", async () => {
+    const { db } = createFakeDatabase();
+    const requestId = await makeProofPendingRequest(db, "ins-7");
+    const input = {
+      idempotencyKey: `request:${requestId}:verify`,
+      requestId,
+      event: "verify",
+      fromState: "PROOF_PENDING",
+      toState: "SUBMITTED",
+      ledgerEntries: [],
+      ledgerEventType: "request.verify",
+      trancheRelease: { insiderProfileId: "ins-7", tranche: 1 as const, points: 70 },
+    };
+
+    const updated = await db.requests.applyTransition(input);
+    expect(updated.state).toBe("SUBMITTED");
+    expect(await db.rewards.listRewards("ins-7")).toHaveLength(1);
+    expect(await db.ledger.getBalance("insider", "ins-7", "points")).toBe(70);
+
+    await db.requests.applyTransition(input);
+    expect(await db.rewards.listRewards("ins-7")).toHaveLength(1);
+    expect(await db.ledger.getBalance("insider", "ins-7", "points")).toBe(70);
+  });
+
+  it("applyTransition with trancheRelease.points 0 releases nothing", async () => {
+    const { db } = createFakeDatabase();
+    const requestId = await makeProofPendingRequest(db, "ins-8");
+    const updated = await db.requests.applyTransition({
+      idempotencyKey: `request:${requestId}:verify`,
+      requestId,
+      event: "verify",
+      fromState: "PROOF_PENDING",
+      toState: "SUBMITTED",
+      ledgerEntries: [],
+      ledgerEventType: "request.verify",
+      trancheRelease: { insiderProfileId: "ins-8", tranche: 1, points: 0 },
+    });
+    expect(updated.state).toBe("SUBMITTED");
+    expect(await db.rewards.listRewards("ins-8")).toHaveLength(0);
+    expect(await db.ledger.getBalance("insider", "ins-8", "points")).toBe(0);
+  });
+
+  it("credits and points never share a txn", async () => {
+    const { db } = createFakeDatabase();
+    const reward = await db.rewards.releaseTranche({ requestId: "req-9", insiderProfileId: "ins-9", tranche: 1, points: 70 });
+    const txn = await db.ledger.postTxn({
+      idempotencyKey: "request:req-9:tranche:1",
+      eventType: "ignored-on-replay",
+      entries: [],
+    });
+    expect(txn.id).toBe(reward.ledgerTxnId);
+    expect(txn.entries.length).toBeGreaterThan(0);
+    expect(new Set(txn.entries.map((e) => e.currency))).toEqual(new Set(["points"]));
+    expect(txn.entries.reduce((s, e) => s + e.amount, 0)).toBe(0);
+  });
+});

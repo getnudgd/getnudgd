@@ -22,6 +22,9 @@ import {
   VerificationProofRecord,
   AdminAuditLogRecord,
   NotificationRecord,
+  InsiderRewardRecord,
+  PostLedgerEntryInput,
+  ReleaseTrancheInput,
 } from "./types";
 
 function assertZeroSum(entries: PostLedgerTxnInput["entries"]): void {
@@ -52,6 +55,7 @@ export function createFakeDatabase(): {
   const verificationProofRows: VerificationProofRecord[] = [];
   const adminAuditLogRows: AdminAuditLogRecord[] = [];
   const notificationRows: NotificationRecord[] = [];
+  const rewardRows: InsiderRewardRecord[] = [];
   let nextId = 1;
   const genId = () => `fake-${nextId++}`;
 
@@ -62,6 +66,41 @@ export function createFakeDatabase(): {
       accounts.push(account);
     }
     return account;
+  }
+
+  function postTxnInternal(idempotencyKey: string, eventType: string, entries: PostLedgerEntryInput[]): LedgerTxnRecord {
+    const existing = txns.find((t) => t.idempotencyKey === idempotencyKey);
+    if (existing) return existing;
+    assertZeroSum(entries);
+    const txnId = genId();
+    const built = entries.map((e) => {
+      const account = findOrCreateAccount(e.ownerType, e.ownerId, e.currency);
+      return { id: genId(), txnId, accountId: account.id, currency: e.currency, amount: e.amount };
+    });
+    const txn: LedgerTxnRecord = { id: txnId, idempotencyKey, eventType, createdAt: new Date(), entries: built };
+    txns.push(txn);
+    return txn;
+  }
+
+  function releaseTrancheInternal(input: ReleaseTrancheInput): InsiderRewardRecord {
+    if (input.points <= 0) throw new Error("Tranche points must be positive");
+    const existing = rewardRows.find((r) => r.requestId === input.requestId && r.tranche === input.tranche);
+    if (existing) return existing;
+    const txn = postTxnInternal(`request:${input.requestId}:tranche:${input.tranche}`, "reward.tranche", [
+      { ownerType: "platform", ownerId: "platform", currency: "points", amount: -input.points },
+      { ownerType: "insider", ownerId: input.insiderProfileId, currency: "points", amount: input.points },
+    ]);
+    const reward: InsiderRewardRecord = {
+      id: genId(),
+      requestId: input.requestId,
+      insiderProfileId: input.insiderProfileId,
+      tranche: input.tranche,
+      points: input.points,
+      ledgerTxnId: txn.id,
+      releasedAt: new Date(),
+    };
+    rewardRows.push(reward);
+    return reward;
   }
 
   function toSearchResult(profile: InsiderProfileRecord): InsiderSearchResult | null {
@@ -312,6 +351,10 @@ export function createFakeDatabase(): {
           });
         }
 
+        if (input.trancheRelease && input.trancheRelease.points > 0) {
+          releaseTrancheInternal({ requestId: input.requestId, ...input.trancheRelease });
+        }
+
         if (input.adminAudit) {
           adminAuditLogRows.push({
             id: genId(),
@@ -387,6 +430,15 @@ export function createFakeDatabase(): {
       },
       async listAuditLogByTarget(targetType, targetId) {
         return adminAuditLogRows.filter((r) => r.targetType === targetType && r.targetId === targetId);
+      },
+    },
+    rewards: {
+      async releaseTranche(input) {
+        return releaseTrancheInternal(input);
+      },
+      async listRewards(insiderProfileId) {
+        // Newest-inserted first: deterministic even when two rows share a millisecond.
+        return rewardRows.filter((r) => r.insiderProfileId === insiderProfileId).reverse();
       },
     },
     notifications: {
