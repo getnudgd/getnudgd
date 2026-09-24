@@ -107,10 +107,11 @@ describe("startWorker", () => {
   it("registers a handler for notify.send that calls deliverNotification", async () => {
     const { db } = createFakeDatabase();
     const user = await db.identity.findOrCreateUser("fb-w-notif", "wnotif@x.com", "seeker");
-    const notification = await db.notifications.create({
+    const { record: notification } = await db.notifications.create({
       userId: user.id,
       template: "request.accepted",
       payload: { requestId: "r1", companyName: "Acme" },
+      idempotencyKey: "seed:worker-notify",
     });
     const { queue, handlers } = makeSpyQueue();
     const { sender: email, sent } = createFakeEmailSender();
@@ -122,5 +123,25 @@ describe("startWorker", () => {
     expect(sent).toHaveLength(1);
     const updated = await db.notifications.getById(notification.id);
     expect(updated?.status).toBe("sent");
+  });
+
+  it("registers notifications.sweep, schedules it every 15 minutes, and the handler is a no-op for a fresh pending row", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-w-sweep", "wsweep@x.com", "seeker");
+    await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: { requestId: "r1", companyName: "Acme" },
+      idempotencyKey: "seed:worker-sweep",
+    });
+    const { queue, handlers, scheduled } = makeSpyQueue();
+    const { sender: email } = createFakeEmailSender();
+    const { gateway: whatsapp } = createFakeWhatsAppGateway();
+
+    await startWorker({ db, queue, email, whatsapp });
+
+    expect(handlers["notifications.sweep"]).toBeDefined();
+    expect(scheduled).toContainEqual({ queueName: "notifications.sweep", cron: "*/15 * * * *" });
+    await expect(handlers["notifications.sweep"]({})).resolves.toBeUndefined();
   });
 });

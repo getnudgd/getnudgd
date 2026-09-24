@@ -243,9 +243,11 @@ export const notifications = pgTable(
     channel: text("channel"),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     error: text("error"),
+    idempotencyKey: text("idempotency_key"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
+    idempotencyKeyUq: uniqueIndex("notifications_idempotency_key_uq").on(table.idempotencyKey),
     statusCheck: check("notifications_status_check", sql`${table.status} in ('pending','sent','failed')`),
     channelCheck: check(
       "notifications_channel_check",

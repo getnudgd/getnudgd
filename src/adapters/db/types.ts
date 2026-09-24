@@ -165,6 +165,7 @@ export interface NotificationRecord {
   channel: NotificationChannel | null;
   deliveredAt: Date | null;
   error: string | null;
+  idempotencyKey: string | null;
   createdAt: Date;
 }
 
@@ -172,6 +173,7 @@ export interface CreateNotificationInput {
   userId: string;
   template: string;
   payload: unknown;
+  idempotencyKey: string;
 }
 
 export interface SubmitProofInput {
@@ -263,9 +265,10 @@ export interface Database {
     listAuditLogByTarget(targetType: string, targetId: string): Promise<AdminAuditLogRecord[]>;
   };
   notifications: {
-    create(input: CreateNotificationInput): Promise<NotificationRecord>;
+    create(input: CreateNotificationInput): Promise<{ record: NotificationRecord; created: boolean }>;
     getById(id: string): Promise<NotificationRecord | null>;
     markSent(id: string, channel: NotificationChannel, deliveredAt: Date): Promise<void>;
     markFailed(id: string, error: string): Promise<void>;
+    listPendingOlderThan(cutoff: Date, limit: number): Promise<NotificationRecord[]>;
   };
 }

@@ -699,10 +699,11 @@ describe("createFakeDatabase notifications", () => {
   it("creates a pending notification with no channel and no deliveredAt", async () => {
     const { db } = createFakeDatabase();
     const user = await db.identity.findOrCreateUser("fb-notif1", "notif1@x.com", "seeker");
-    const record = await db.notifications.create({
+    const { record } = await db.notifications.create({
       userId: user.id,
       template: "request.accepted",
       payload: { requestId: "r1", companyName: "Acme" },
+      idempotencyKey: "test:k1",
     });
     expect(record.status).toBe("pending");
     expect(record.channel).toBeNull();
@@ -718,7 +719,12 @@ describe("createFakeDatabase notifications", () => {
   it("markSent sets status, channel, and deliveredAt", async () => {
     const { db } = createFakeDatabase();
     const user = await db.identity.findOrCreateUser("fb-notif2", "notif2@x.com", "seeker");
-    const record = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {} });
+    const { record } = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: {},
+      idempotencyKey: "test:k2",
+    });
     const when = new Date();
     await db.notifications.markSent(record.id, "email", when);
     const updated = await db.notifications.getById(record.id);
@@ -727,13 +733,85 @@ describe("createFakeDatabase notifications", () => {
     expect(updated?.deliveredAt).toEqual(when);
   });
 
+  it("markSent clears a stale error left by an earlier failure", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-notif2b", "notif2b@x.com", "seeker");
+    const { record } = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: {},
+      idempotencyKey: "test:k2b",
+    });
+    await db.notifications.markFailed(record.id, "boom");
+    await db.notifications.markSent(record.id, "email", new Date());
+    const updated = await db.notifications.getById(record.id);
+    expect(updated?.status).toBe("sent");
+    expect(updated?.channel).toBe("email");
+    expect(updated?.error).toBeNull();
+  });
+
   it("markFailed sets status and error", async () => {
     const { db } = createFakeDatabase();
     const user = await db.identity.findOrCreateUser("fb-notif3", "notif3@x.com", "seeker");
-    const record = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {} });
+    const { record } = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: {},
+      idempotencyKey: "test:k3",
+    });
     await db.notifications.markFailed(record.id, "all channels failed");
     const updated = await db.notifications.getById(record.id);
     expect(updated?.status).toBe("failed");
     expect(updated?.error).toBe("all channels failed");
+  });
+
+  it("create returns created=true and the record for a new idempotency key", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-idem-1", "idem1@x.com", "seeker");
+    const result = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: { a: 1 },
+      idempotencyKey: "evt:1:request.accepted:u",
+    });
+    expect(result.created).toBe(true);
+    expect(result.record.idempotencyKey).toBe("evt:1:request.accepted:u");
+    expect(result.record.status).toBe("pending");
+  });
+
+  it("create with an existing idempotency key returns the original record with created=false and adds no row", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-idem-2", "idem2@x.com", "seeker");
+    const first = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: { a: 1 },
+      idempotencyKey: "evt:2:request.accepted:u",
+    });
+    const second = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: { a: 2 },
+      idempotencyKey: "evt:2:request.accepted:u",
+    });
+    expect(second.created).toBe(false);
+    expect(second.record.id).toBe(first.record.id);
+    expect(second.record.payload).toEqual({ a: 1 });
+  });
+
+  it("listPendingOlderThan returns only pending rows created before the cutoff, oldest first, up to the limit", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-lp-1", "lp1@x.com", "seeker");
+    const a = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "lp:a" });
+    const b = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "lp:b" });
+    const c = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "lp:c" });
+    await db.notifications.markSent(b.record.id, "email", new Date());
+    const future = new Date(Date.now() + 60_000);
+    const past = new Date(Date.now() - 60_000);
+
+    const all = await db.notifications.listPendingOlderThan(future, 10);
+    expect(all.map((n) => n.id)).toEqual([a.record.id, c.record.id]);
+    expect(await db.notifications.listPendingOlderThan(past, 10)).toEqual([]);
+    expect((await db.notifications.listPendingOlderThan(future, 1)).map((n) => n.id)).toEqual([a.record.id]);
   });
 });

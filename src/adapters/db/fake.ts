@@ -391,6 +391,8 @@ export function createFakeDatabase(): {
     },
     notifications: {
       async create(input) {
+        const existing = notificationRows.find((n) => n.idempotencyKey === input.idempotencyKey);
+        if (existing) return { record: existing, created: false };
         const record: NotificationRecord = {
           id: genId(),
           userId: input.userId,
@@ -400,10 +402,11 @@ export function createFakeDatabase(): {
           channel: null,
           deliveredAt: null,
           error: null,
+          idempotencyKey: input.idempotencyKey,
           createdAt: new Date(),
         };
         notificationRows.push(record);
-        return record;
+        return { record, created: true };
       },
       async getById(id) {
         return notificationRows.find((n) => n.id === id) ?? null;
@@ -414,12 +417,19 @@ export function createFakeDatabase(): {
         record.status = "sent";
         record.channel = channel;
         record.deliveredAt = deliveredAt;
+        record.error = null;
       },
       async markFailed(id, error) {
         const record = notificationRows.find((n) => n.id === id);
         if (!record) throw new Error(`Notification ${id} not found`);
         record.status = "failed";
         record.error = error;
+      },
+      async listPendingOlderThan(cutoff, limit) {
+        return notificationRows
+          .filter((n) => n.status === "pending" && n.createdAt.getTime() < cutoff.getTime())
+          .sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime())
+          .slice(0, limit);
       },
     },
   };

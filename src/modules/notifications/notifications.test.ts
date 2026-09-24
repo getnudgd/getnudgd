@@ -4,7 +4,13 @@ import { createFakeQueueClient } from "../../jobs/queue.fake";
 import { createFakeEmailSender } from "../../adapters/email/fake";
 import { createFakeWhatsAppGateway } from "../../adapters/whatsapp/fake";
 import type { QueueClient } from "../../jobs/queue";
-import { notify, deliverNotification, NotificationNotFoundError } from "./notifications";
+import {
+  notify,
+  deliverNotification,
+  sweepPendingNotifications,
+  PENDING_SWEEP_AGE_MS,
+  NotificationNotFoundError,
+} from "./notifications";
 
 describe("notify", () => {
   it("creates a pending notification row and enqueues notify.send with a singleton key and retry options", async () => {
@@ -26,7 +32,7 @@ describe("notify", () => {
       async schedule() {},
     };
 
-    await notify({ db, queue: spyQueue }, user.id, "request.accepted", { requestId: "r1", companyName: "Acme" });
+    await notify({ db, queue: spyQueue }, user.id, "request.accepted", { requestId: "r1", companyName: "Acme" }, "evt:n1");
 
     expect(sentJobs).toHaveLength(1);
     expect(sentJobs[0].queueName).toBe("notify.send");
@@ -51,10 +57,51 @@ describe("notify", () => {
     const createSpy = vi.spyOn(db.notifications, "create");
 
     await expect(
-      notify({ db, queue }, user.id, "request.accepted", { requestId: "r1" }) // missing companyName
+      notify({ db, queue }, user.id, "request.accepted", { requestId: "r1" }, "evt:n2") // missing companyName
     ).rejects.toThrow();
     expect(sendSpy).not.toHaveBeenCalled();
     expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not create a second row or enqueue a second job for the same event, template and user", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-n-dup", "ndup@x.com", "seeker");
+    const sent: string[] = [];
+    const spyQueue: QueueClient = {
+      async start() {},
+      async stop() {},
+      async send(queueName) {
+        sent.push(queueName);
+        return "job";
+      },
+      async work() {},
+      async schedule() {},
+    };
+    const payload = { requestId: "r1", companyName: "Acme" };
+    await notify({ db, queue: spyQueue }, user.id, "request.accepted", payload, "request:r1:accept");
+    await notify({ db, queue: spyQueue }, user.id, "request.accepted", payload, "request:r1:accept");
+    expect(sent.filter((q) => q === "notify.send")).toHaveLength(1);
+  });
+
+  it("notifies two different recipients of the same event and template", async () => {
+    const { db } = createFakeDatabase();
+    const a = await db.identity.findOrCreateUser("fb-n-a", "na@x.com", "seeker");
+    const b = await db.identity.findOrCreateUser("fb-n-b", "nb@x.com", "seeker");
+    const sent: string[] = [];
+    const spyQueue: QueueClient = {
+      async start() {},
+      async stop() {},
+      async send(queueName) {
+        sent.push(queueName);
+        return "job";
+      },
+      async work() {},
+      async schedule() {},
+    };
+    const payload = { requestId: "r1", companyName: "Acme", audience: "seeker" };
+    await notify({ db, queue: spyQueue }, a.id, "proof.verified", payload, "review:r1:k1");
+    await notify({ db, queue: spyQueue }, b.id, "proof.verified", payload, "review:r1:k1");
+    expect(sent.filter((q) => q === "notify.send")).toHaveLength(2);
   });
 });
 
@@ -63,10 +110,11 @@ describe("deliverNotification", () => {
     const { db } = createFakeDatabase();
     const user = await db.identity.findOrCreateUser(`fb-dn-${Math.random()}`, `dn${Math.random()}@x.com`, "seeker");
     if (overrides?.phone) await db.identity.setUserPhone(user.id, overrides.phone);
-    const record = await db.notifications.create({
+    const { record } = await db.notifications.create({
       userId: user.id,
       template: "request.accepted",
       payload: { requestId: "r1", companyName: "Acme" },
+      idempotencyKey: `seed:${user.id}`,
     });
     return { db, user, record };
   }
@@ -133,6 +181,20 @@ describe("deliverNotification", () => {
     expect(await db.notifications.getById(record.id)).toEqual(before);
   });
 
+  it("delivers a row previously marked failed on the next call and clears its error", async () => {
+    const { db, record } = await seedPendingNotification();
+    await db.notifications.markFailed(record.id, "earlier failure");
+    const { sender: email, sent } = createFakeEmailSender();
+    const { gateway: whatsapp } = createFakeWhatsAppGateway();
+
+    await deliverNotification({ db, email, whatsapp }, record.id);
+
+    expect(sent).toHaveLength(1);
+    const updated = await db.notifications.getById(record.id);
+    expect(updated?.status).toBe("sent");
+    expect(updated?.error).toBeNull();
+  });
+
   it("skips WhatsApp entirely and goes straight to email when the user has no phone on file", async () => {
     const { db, record } = await seedPendingNotification();
     const { sender: email, sent } = createFakeEmailSender();
@@ -179,10 +241,170 @@ describe("deliverNotification", () => {
     expect(updated?.error).toContain("Brevo is down");
   });
 
+  it("marks the row failed and returns without throwing when the recipient user no longer exists", async () => {
+    const { db } = createFakeDatabase();
+    const { record } = await db.notifications.create({
+      userId: "00000000-0000-0000-0000-000000000000",
+      template: "request.accepted",
+      payload: { requestId: "r1", companyName: "Acme" },
+      idempotencyKey: "df:nouser",
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      deliverNotification(
+        { db, email: createFakeEmailSender().sender, whatsapp: createFakeWhatsAppGateway().gateway },
+        record.id
+      )
+    ).resolves.toBeUndefined();
+    const after = await db.notifications.getById(record.id);
+    expect(after?.status).toBe("failed");
+    expect(after?.error).toContain("not found");
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("marks the row failed and returns without throwing for an unknown template", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-df-tpl", "dftpl@x.com", "seeker");
+    const { record } = await db.notifications.create({
+      userId: user.id,
+      template: "not.a.template",
+      payload: {},
+      idempotencyKey: "df:tpl",
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      deliverNotification(
+        { db, email: createFakeEmailSender().sender, whatsapp: createFakeWhatsAppGateway().gateway },
+        record.id
+      )
+    ).resolves.toBeUndefined();
+    const after = await db.notifications.getById(record.id);
+    expect(after?.status).toBe("failed");
+    expect(after?.error).toContain("not.a.template");
+    errorSpy.mockRestore();
+  });
+
+  it("marks the row failed and returns without throwing when the stored payload no longer matches its template", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-df-pl", "dfpl@x.com", "seeker");
+    const { record } = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: { wrong: true },
+      idempotencyKey: "df:pl",
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      deliverNotification(
+        { db, email: createFakeEmailSender().sender, whatsapp: createFakeWhatsAppGateway().gateway },
+        record.id
+      )
+    ).resolves.toBeUndefined();
+    const after = await db.notifications.getById(record.id);
+    expect(after?.status).toBe("failed");
+    expect(after?.error).toContain("no longer matches");
+    errorSpy.mockRestore();
+  });
+
+  it("records every attempted channel's failure cause when all channels fail, and still throws", async () => {
+    const { db, user, record } = await seedPendingNotification({ phone: "+919999900001" });
+    const { gateway: whatsapp, setActiveSession, setSessionSendFailure, setTemplateSendFailure } =
+      createFakeWhatsAppGateway();
+    setActiveSession(user.id, true);
+    setSessionSendFailure("+919999900001", true);
+    setTemplateSendFailure("+919999900001", true);
+    const failingEmail = {
+      async send(): Promise<{ id: string }> {
+        throw new Error("Brevo is down");
+      },
+    };
+
+    await expect(deliverNotification({ db, email: failingEmail, whatsapp }, record.id)).rejects.toThrow();
+
+    const after = await db.notifications.getById(record.id);
+    expect(after?.status).toBe("failed");
+    expect(after?.error).toContain("whatsapp_session: Fake WhatsApp session send failed");
+    expect(after?.error).toContain("whatsapp_template: Fake WhatsApp template send failed");
+    expect(after?.error).toContain("email: Brevo is down");
+  });
+
   it("throws NotificationNotFoundError for an unknown notification id", async () => {
     const { db } = createFakeDatabase();
     const { sender: email } = createFakeEmailSender();
     const { gateway: whatsapp } = createFakeWhatsAppGateway();
     await expect(deliverNotification({ db, email, whatsapp }, "nope")).rejects.toThrow(NotificationNotFoundError);
+  });
+});
+
+describe("sweepPendingNotifications", () => {
+  function makeSpyQueue(failFor?: (notificationId: string) => boolean) {
+    const sent: Array<{ notificationId: string; options?: { singletonKey?: string; retryLimit?: number; retryBackoff?: boolean } }> = [];
+    const queue: QueueClient = {
+      async start() {},
+      async stop() {},
+      async send(_queueName, payload, options) {
+        const { notificationId } = payload as { notificationId: string };
+        if (failFor?.(notificationId)) throw new Error("queue down");
+        sent.push({ notificationId, options });
+        return "job";
+      },
+      async work() {},
+      async schedule() {},
+    };
+    return { queue, sent };
+  }
+
+  it("re-enqueues pending rows older than the sweep age with the standard singleton key and retry options", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-sw-1", "sw1@x.com", "seeker");
+    const { record } = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "sw:1" });
+    const { queue, sent } = makeSpyQueue();
+
+    const count = await sweepPendingNotifications({ db, queue }, new Date(Date.now() + PENDING_SWEEP_AGE_MS + 1000));
+
+    expect(count).toBe(1);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].notificationId).toBe(record.id);
+    expect(sent[0].options?.singletonKey).toBe(`notify:${record.id}`);
+    expect(sent[0].options?.retryLimit).toBe(3);
+    expect(sent[0].options?.retryBackoff).toBe(true);
+  });
+
+  it("does not touch a pending row younger than the sweep age", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-sw-2", "sw2@x.com", "seeker");
+    await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "sw:2" });
+    const { queue, sent } = makeSpyQueue();
+    expect(await sweepPendingNotifications({ db, queue }, new Date())).toBe(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("does not re-enqueue rows that are already sent or failed", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-sw-3", "sw3@x.com", "seeker");
+    const s = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "sw:3s" });
+    const f = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "sw:3f" });
+    await db.notifications.markSent(s.record.id, "email", new Date());
+    await db.notifications.markFailed(f.record.id, "boom");
+    const { queue, sent } = makeSpyQueue();
+    expect(await sweepPendingNotifications({ db, queue }, new Date(Date.now() + PENDING_SWEEP_AGE_MS + 1000))).toBe(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("keeps sweeping the remaining rows when the queue fails for one of them", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-sw-4", "sw4@x.com", "seeker");
+    const first = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "sw:4a" });
+    const second = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {}, idempotencyKey: "sw:4b" });
+    const { queue, sent } = makeSpyQueue((id) => id === first.record.id);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const count = await sweepPendingNotifications({ db, queue }, new Date(Date.now() + PENDING_SWEEP_AGE_MS + 1000));
+
+    expect(count).toBe(1);
+    expect(sent.map((s) => s.notificationId)).toEqual([second.record.id]);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

@@ -110,10 +110,16 @@ export async function accept(deps: RequestsDeps, requestId: string): Promise<Ins
     const seekerProfile = await deps.db.identity.getSeekerProfileById(record.seekerProfileId);
     const insiderSummary = await deps.db.insiders.getInsiderById(record.insiderProfileId);
     if (seekerProfile && insiderSummary) {
-      await notify(deps, seekerProfile.userId, "request.accepted", {
-        requestId,
-        companyName: insiderSummary.companyName,
-      });
+      await notify(
+        deps,
+        seekerProfile.userId,
+        "request.accepted",
+        {
+          requestId,
+          companyName: insiderSummary.companyName,
+        },
+        `request:${requestId}:accept`
+      );
     }
   } catch (err) {
     console.error(`[requests] failed to notify on accept for request ${requestId}`, err);
@@ -144,11 +150,17 @@ export async function decline(deps: RequestsDeps, requestId: string): Promise<In
     const insiderSummary = await deps.db.insiders.getInsiderById(record.insiderProfileId);
     if (seekerProfile && insiderSummary) {
       const refundedCredits = Math.round((record.creditCost * rules.refundPercentOnDecline) / 100);
-      await notify(deps, seekerProfile.userId, "request.declined", {
-        requestId,
-        companyName: insiderSummary.companyName,
-        refundedCredits,
-      });
+      await notify(
+        deps,
+        seekerProfile.userId,
+        "request.declined",
+        {
+          requestId,
+          companyName: insiderSummary.companyName,
+          refundedCredits,
+        },
+        `request:${requestId}:decline`
+      );
     }
   } catch (err) {
     console.error(`[requests] failed to notify on decline for request ${requestId}`, err);
@@ -190,11 +202,17 @@ export async function expire(deps: RequestsDeps, requestId: string): Promise<Ins
     const insiderSummary = await deps.db.insiders.getInsiderById(record.insiderProfileId);
     if (seekerProfile && insiderSummary) {
       const refundedCredits = Math.round((record.creditCost * rules.refundPercentOnExpiry) / 100);
-      await notify(deps, seekerProfile.userId, "request.expired", {
-        requestId,
-        companyName: insiderSummary.companyName,
-        refundedCredits,
-      });
+      await notify(
+        deps,
+        seekerProfile.userId,
+        "request.expired",
+        {
+          requestId,
+          companyName: insiderSummary.companyName,
+          refundedCredits,
+        },
+        `request:${requestId}:expire`
+      );
     }
   } catch (err) {
     console.error(`[requests] failed to notify on expire for request ${requestId}`, err);

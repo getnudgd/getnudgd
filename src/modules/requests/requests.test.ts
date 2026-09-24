@@ -259,6 +259,34 @@ describe("accept", () => {
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
   });
+
+  it("does not send a second notification when a racing caller replays the same accept", async () => {
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const sends: string[] = [];
+    const spyQueue: QueueClient = {
+      ...deps.queue,
+      async send(queueName, payload, options) {
+        sends.push(queueName);
+        return deps.queue.send(queueName, payload, options);
+      },
+    };
+    const spyDeps = { db: deps.db, queue: spyQueue };
+    const request = await sendRequest(spyDeps, { idempotencyKey: "k-replay-accept", seekerProfileId, insiderProfileId });
+    const staleSnapshot = { ...(await deps.db.requests.getById(request.id))! }; // copy: the fake returns live rows; still SENT
+
+    await accept(spyDeps, request.id);
+
+    // Second caller read the request before the first committed, so it passes
+    // the state check and reaches applyTransition's idempotent-replay branch.
+    const racingDb: Database = {
+      ...deps.db,
+      requests: { ...deps.db.requests, getById: async () => staleSnapshot },
+    };
+    const replayed = await accept({ db: racingDb, queue: spyQueue }, request.id);
+
+    expect(replayed.state).toBe("ACCEPTED");
+    expect(sends.filter((q) => q === "notify.send")).toHaveLength(1);
+  });
 });
 
 describe("decline", () => {
