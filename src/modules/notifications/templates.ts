@@ -1,6 +1,19 @@
 import { z } from "zod";
 import { brand } from "../../config/brand";
 
+/**
+ * Escapes HTML special characters to prevent injection attacks.
+ * Must escape & first to avoid double-escaping.
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export const requestAcceptedPayloadSchema = z.object({
   requestId: z.string().min(1),
   companyName: z.string().min(1),
@@ -61,7 +74,7 @@ export const templates: Record<TemplateName, TemplateDefinition> = {
       const payload = requestAcceptedPayloadSchema.parse(raw);
       return {
         subject: "Your Insider Request was accepted",
-        html: `<p>Good news — an Insider at ${payload.companyName} accepted your Insider Request on ${brand.name}. They'll submit you internally soon.</p>`,
+        html: `<p>Good news — an Insider at ${escapeHtml(payload.companyName)} accepted your Insider Request on ${brand.name}. They'll submit you internally soon.</p>`,
       };
     },
     renderWhatsAppText(raw) {
@@ -80,7 +93,7 @@ export const templates: Record<TemplateName, TemplateDefinition> = {
       const payload = requestDeclinedPayloadSchema.parse(raw);
       return {
         subject: "Your Insider Request was declined",
-        html: `<p>An Insider at ${payload.companyName} declined your Insider Request on ${brand.name}. ${payload.refundedCredits} credits have been refunded to your account.</p>`,
+        html: `<p>An Insider at ${escapeHtml(payload.companyName)} declined your Insider Request on ${brand.name}. ${payload.refundedCredits} credits have been refunded to your account.</p>`,
       };
     },
     renderWhatsAppText(raw) {
@@ -99,7 +112,7 @@ export const templates: Record<TemplateName, TemplateDefinition> = {
       const payload = requestExpiredPayloadSchema.parse(raw);
       return {
         subject: "Your Insider Request expired",
-        html: `<p>Your Insider Request to ${payload.companyName} on ${brand.name} expired without a response. ${payload.refundedCredits} credits have been refunded to your account.</p>`,
+        html: `<p>Your Insider Request to ${escapeHtml(payload.companyName)} on ${brand.name} expired without a response. ${payload.refundedCredits} credits have been refunded to your account.</p>`,
       };
     },
     renderWhatsAppText(raw) {
@@ -118,13 +131,13 @@ export const templates: Record<TemplateName, TemplateDefinition> = {
       const payload = proofVerifiedPayloadSchema.parse(raw);
       if (payload.audience === "insider") {
         return {
-          subject: `You vouched for ${payload.seekerName ?? "a Seeker"} — verified!`,
-          html: `<p>Your vouch for ${payload.seekerName ?? "the Seeker"} at ${payload.companyName} has been verified on ${brand.name}. Your Insider Rewards will follow once processed.</p>`,
+          subject: `You vouched for ${escapeHtml(payload.seekerName ?? "a Seeker")} — verified!`,
+          html: `<p>Your vouch for ${escapeHtml(payload.seekerName ?? "the Seeker")} at ${escapeHtml(payload.companyName)} has been verified on ${brand.name}. Your Insider Rewards will follow once processed.</p>`,
         };
       }
       return {
         subject: "You were submitted internally!",
-        html: `<p>Great news — the Insider at ${payload.companyName} has confirmed you were submitted internally on ${brand.name}.</p>`,
+        html: `<p>Great news — the Insider at ${escapeHtml(payload.companyName)} has confirmed you were submitted internally on ${brand.name}.</p>`,
       };
     },
     renderWhatsAppText(raw) {
@@ -149,8 +162,8 @@ export const templates: Record<TemplateName, TemplateDefinition> = {
     renderEmail(raw) {
       const payload = proofRejectedPayloadSchema.parse(raw);
       return {
-        subject: `Your proof for ${payload.seekerName} needs another look`,
-        html: `<p>Your submitted proof for ${payload.seekerName} on ${brand.name} was not accepted: ${payload.reason}. Please resubmit.</p>`,
+        subject: `Your proof for ${escapeHtml(payload.seekerName)} needs another look`,
+        html: `<p>Your submitted proof for ${escapeHtml(payload.seekerName)} on ${brand.name} was not accepted: ${escapeHtml(payload.reason)}. Please resubmit.</p>`,
       };
     },
     renderWhatsAppText(raw) {

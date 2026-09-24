@@ -65,4 +65,61 @@ describe("templates", () => {
     const email = templates["request.accepted"].renderEmail({ requestId: "r1", companyName: "Acme" });
     expect(email.html).toMatch(/GetNudgd/);
   });
+
+  it("escapes HTML special characters in companyName when rendering email", () => {
+    const evilPayload = { requestId: "r1", companyName: '<b>&"\'</b>' };
+    for (const template of [
+      templates["request.accepted"],
+      templates["request.declined"],
+      templates["request.expired"],
+    ]) {
+      const email = template.renderEmail({ ...evilPayload, ...(template === templates["request.declined"] || template === templates["request.expired"] ? { refundedCredits: 0 } : {}) });
+      expect(email.html).not.toContain("<b>");
+      expect(email.html).toContain("&lt;b&gt;");
+      expect(email.html).toContain("&amp;");
+      expect(email.html).toContain("&quot;");
+      expect(email.html).toContain("&#39;");
+    }
+  });
+
+  it("escapes HTML special characters in companyName and seekerName in proof.verified email", () => {
+    const evilPayload = { requestId: "r1", companyName: '<b>&"\'</b>', audience: "insider" as const, seekerName: '<script>&"\'</script>' };
+    const email = templates["proof.verified"].renderEmail(evilPayload);
+    expect(email.html).not.toContain("<b>");
+    expect(email.html).not.toContain("<script>");
+    expect(email.html).toContain("&lt;b&gt;");
+    expect(email.html).toContain("&lt;script&gt;");
+    expect(email.html).toContain("&amp;");
+    expect(email.html).toContain("&quot;");
+    expect(email.html).toContain("&#39;");
+  });
+
+  it("escapes HTML special characters in seekerName and reason in proof.rejected email", () => {
+    const evilPayload = { requestId: "r1", seekerName: '<img src=x onerror=alert(1)>', reason: '"><script>alert("xss")</script>' };
+    const email = templates["proof.rejected"].renderEmail(evilPayload);
+    expect(email.html).not.toContain("<img");
+    expect(email.html).not.toContain("<script>");
+    expect(email.html).toContain("&lt;img");
+    expect(email.html).toContain("&lt;script&gt;");
+    expect(email.html).toContain("&quot;");
+  });
+
+  it("does NOT escape HTML special characters in WhatsApp text output", () => {
+    const evilPayload = { requestId: "r1", companyName: '<b>&"\'</b>', refundedCredits: 1 };
+    const whatsappText = templates["request.declined"].renderWhatsAppText(evilPayload);
+    // WhatsApp text should contain the raw characters (not escaped)
+    expect(whatsappText).toContain("<b>");
+    expect(whatsappText).toContain("&");
+    expect(whatsappText).not.toContain("&lt;");
+    expect(whatsappText).not.toContain("&amp;");
+  });
+
+  it("does NOT escape HTML special characters in whatsappParams output", () => {
+    const evilPayload = { requestId: "r1", seekerName: '<script>', reason: 'alert("xss")' };
+    const params = templates["proof.rejected"].whatsappParams(evilPayload);
+    // WhatsApp params should contain raw characters (not escaped)
+    expect(params.seekerName).toContain("<script>");
+    expect(params.reason).toContain("alert");
+    expect(params.reason).not.toContain("&lt;");
+  });
 });
