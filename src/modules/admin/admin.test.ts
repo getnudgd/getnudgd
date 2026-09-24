@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
 import { createFakeQueueClient } from "../../jobs/queue.fake";
 import { sendRequest, accept, submitProof, type RequestsDeps } from "../requests/requests";
@@ -101,6 +101,32 @@ describe("reviewProof", () => {
     });
     expect(secondReject.state).toBe("ACCEPTED");
   });
+
+  it("notifies the insider and the seeker on verify", async () => {
+    const { deps, requestId } = await makeProofPendingRequest();
+    const notifySpy = vi.spyOn(deps.queue, "send");
+
+    await reviewProof(deps, { idempotencyKey: "notifrev1", adminUserId: "admin-1", requestId, decision: "verify" });
+
+    const notifyCalls = notifySpy.mock.calls.filter(([queueName]) => queueName === "notify.send");
+    expect(notifyCalls).toHaveLength(2);
+  });
+
+  it("notifies only the insider on reject", async () => {
+    const { deps, requestId } = await makeProofPendingRequest();
+    const notifySpy = vi.spyOn(deps.queue, "send");
+
+    await reviewProof(deps, {
+      idempotencyKey: "notifrev2",
+      adminUserId: "admin-1",
+      requestId,
+      decision: "reject",
+      reason: "Screenshot was unreadable",
+    });
+
+    const notifyCalls = notifySpy.mock.calls.filter(([queueName]) => queueName === "notify.send");
+    expect(notifyCalls).toHaveLength(1);
+  });
 });
 
 describe("listPendingProofs", () => {
@@ -114,6 +140,6 @@ describe("listPendingProofs", () => {
 
   it("returns an empty list when nothing is pending", async () => {
     const { db } = createFakeDatabase();
-    expect(await listPendingProofs({ db })).toEqual([]);
+    expect(await listPendingProofs({ db, queue: createFakeQueueClient() })).toEqual([]);
   });
 });
