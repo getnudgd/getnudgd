@@ -8,13 +8,13 @@ This file replaces the 2026-09-24 version, which said the notifications module w
 
 ## 0. TL;DR — where things stand
 
-- `main` has everything through **Phase 1 Timers** and the **notifications module**, plus a live-run hotfix (`1be49d3`, see §1). The notifications merge commit is `ea8c24d` (`--no-ff`, like `phase-1-timers`). The handoff commit sits on top of it.
-- **Nothing is in flight.** The `notifications-module` worktree and branch are gone. No pending worktrees.
+- `main` has everything through **Phase 1 Timers**, the **notifications module** and the **notifications hardening** work. Merge commits: notifications `ea8c24d`, queue hotfix `1be49d3`, hardening `f298daa` (all `--no-ff`). The handoff commit sits on top.
+- **Nothing is in flight.** All notifications worktrees and branches are gone. No pending worktrees.
 - **Nothing has been pushed.** `origin/main` is far behind local `main` and stays that way until Anmol says to push.
-- Verified on `main` after the merge: `npm run lint` clean (0 problems), `npm run typecheck` clean, `npm test` 46 files / 394 tests passing (after the hotfix).
+- Verified on `main` after the hardening merge: `npm run lint` clean, `npm run typecheck` clean, `npm test` 46 files passed + 1 skipped (412 tests passed, 4 skipped — the opt-in live test), and the live test 4/4 against the dev Postgres.
 - Untracked and deliberately not committed (waiting for Anmol to say so): `PRD.md`, `TRD.md`, `USER-FLOWS.md`.
 
-**The exact next step:** start the `rewards` module (Phase 1 backend, next after notifications). Run `superpowers:brainstorming` → spec in `docs/superpowers/specs/` → plan in `docs/superpowers/plans/` → worktree → subagent-driven-development. Before brainstorming, ask Anmol for the placeholder-worthy values (tranche split, minimum redemption, PAN threshold): they live in `app_config`, never in code (AGENTS.md §0.5). Do **not** wire any real `EmailSender` or `WhatsAppGateway` until the notifications hard gate in §1 is done.
+**The exact next step:** start the `rewards` module (Phase 1 backend, next after notifications). Run `superpowers:brainstorming` → spec in `docs/superpowers/specs/` → plan in `docs/superpowers/plans/` → worktree → subagent-driven-development. Before brainstorming, ask Anmol for the placeholder-worthy values (tranche split, minimum redemption, PAN threshold): they live in `app_config`, never in code (AGENTS.md §0.5). Do **not** wire any real `EmailSender` or `WhatsAppGateway` until the `singletonKey`-does-not-dedupe hard gate in §1 is done.
 
 ---
 
@@ -38,13 +38,18 @@ Migration `0009` was checked by inspection (matches `schema.ts` and the snapshot
 
 **Live run found a merged regression, fixed in `1be49d3`:** Task 1 (`d9a63f8`) made `queue.real.ts` `send()` pass `retryLimit`/`retryBackoff` as keys with value `undefined`. pg-boss validates with `'retryLimit' in config`, so every send without retry options threw, and `sendRequest`'s `request.expire` job (the 48h timer) was never enqueued on a real queue (only the hourly sweep would have expired requests). Fakes and reviews missed it. `send()` now includes an option key only when set, with a unit test (mocked `PgBoss`) asserting key absence. Re-verified live: `request.expire` jobs are created with `start_after` ≈ 48h ahead.
 
-### HARD GATE before any real EmailSender / WhatsAppGateway is wired
+### Hard-gate follow-ups: what is closed, what is still open
 
-1. **Event-derived idempotency for notifications (AGENTS.md Part 2.4).** `applyTransition`'s idempotent-replay branch (`src/adapters/db/real.ts` ~392–399, and the fake) returns the current row silently, so a racing second caller of accept/decline/expire/reviewProof can re-notify. Fix: additive migration `0010` adding a unique `notifications.idempotency_key`; `create` uses `ON CONFLICT DO NOTHING` (fake and real); optional key param on `notify()`; event-derived keys at the 5 call sites (e.g. `request:{id}:accept:notify:{template}:{audience}`). Deliberately deferred (narrow race, no money impact, all senders are fakes today).
-2. **Outbox / sweep.** `notify()` writes the row before `queue.send`; a failed send leaves an orphan `pending` row with no job. Add a sweep or outbox that re-enqueues old `pending` rows.
-3. **`deliverNotification` failure bookkeeping.** Unknown template / unparseable stored payload / missing user throw without `markFailed` (row stays `pending` across retries); WhatsApp failure causes are dropped (only the email error is stored).
+Closed by the `notifications-hardening` branch (merge `f298daa`, plan `docs/superpowers/plans/2026-09-25-notifications-hardening-plan.md`, migration `0010`, applied to the dev DB):
 
-Items 1–3 are one follow-up.
+- **Event-derived idempotency.** `notifications.idempotency_key` (unique); `notify(deps, userId, template, payload, eventKey)` composes `{eventKey}:{template}:{userId}` and returns without enqueueing when the row already exists, so a racing replay of accept/decline/expire/reviewProof cannot re-notify. `db.notifications.create` returns `{ record, created }`.
+- **Pending sweep.** `sweepPendingNotifications` (worker queue `notifications.sweep`, cron every 15 min) re-enqueues rows still `pending` after 30 min.
+- **Failure bookkeeping.** Missing user / unknown template / unparseable stored payload → row `failed` with a message, no retry; all channels failing → row `failed` with every channel's cause, still rethrows. `markSent` clears a stale `error`.
+- **Live integration test.** `src/modules/notifications/notifications.live.test.ts`, opt-in (`RUN_VENDOR_TESTS=1`), runs the real `Database` notification methods and real pg-boss `send` against the dev Postgres: `export $(grep -v '^#' .env.local | grep -v '^$' | xargs -d '\n'); npm run db:migrate; RUN_VENDOR_TESTS=1 npx vitest run src/modules/notifications/notifications.live.test.ts` (4 passing on 2026-09-25). **Do not export `.env.local` when running the full `npm test`** (`ADAPTERS=real` makes `src/config/env.test.ts` fail).
+
+**Still a HARD GATE before any real EmailSender / WhatsAppGateway is wired, or any worker concurrency increase:** the `notify:{id}` `singletonKey` does NOT dedupe on pg-boss's default `standard` queue policy. Double delivery is prevented today only by a single worker running one job at a time plus `deliverNotification`'s `status === "sent"` guard. Add either an atomic claim (`UPDATE notifications SET status='sending' WHERE id=$1 AND status IN ('pending','failed') RETURNING`) or a deduplicating queue policy (policy is set at queue creation, so it needs a new queue name on existing databases).
+
+Also open (recorded in the hardening plan's last section): a notification is lost if `notifications.create` fails or the process dies after the transition commits (fix: write the notification row inside the `applyTransition` transaction when real adapters land); the sweep re-enqueues the same oldest 100 rows if more than 100 stay pending forever and has no partial index `(created_at) WHERE status='pending'`; a few test-quality minors.
 
 ### Before launch
 
@@ -75,8 +80,10 @@ Everything below is tested, reviewed (implementer → task reviewer → fix loop
 | Direct fixes | `src/lib/adapters.ts` factory (real vs fake db/queue), idempotent company seeding, `Countdown.tsx` flakiness, `.worktrees/**` excluded from lint/test |
 | Phase 1 Timers (merge `4e6710e`) | `request.expire` job, `requests.sweep` hourly cron, pg-boss `startAfter`/`singletonKey` wiring, `src/jobs/run-worker.ts`, `adapters.impl.ts` split. Follow-ups: `docs/superpowers/plans/2026-09-20-phase-1-timers-plan.md`. |
 | **Notifications** (merge `ea8c24d`) | See §1. Follow-ups: the last section of the notifications plan. |
+| **Queue hotfix** (merge `1be49d3`) | `queue.real.ts` omits unset pg-boss options (found by the first live run). |
+| **Notifications hardening** (merge `f298daa`) | Event-derived notification idempotency (migration `0010`), pending sweep, failure bookkeeping, opt-in live integration test. See §1. |
 
-**Migrations on `main`:** `0000`–`0009`.
+**Migrations on `main`:** `0000`–`0010`.
 
 ---
 
@@ -155,7 +162,7 @@ Ledger rule: each plan's ledger is `.superpowers/sdd/<plan-basename>/progress.md
 
 - `.env.local` is missing in fresh worktrees.
 - Merging a worktree can double test counts if `.worktrees/**` isn't excluded from `vitest.config.ts` and `eslint.config.mjs` (it is now).
-- **Idempotency keys must embed the entity id** (`send:`, `request:{id}:{event}`, `proof:{requestId}:{key}`, `review:{requestId}:{key}`, `notify:{notificationId}`). This bug class appeared twice. Note the notifications job key embeds the notification id, but the notification row itself is not yet keyed on the triggering event — that is the §1 hard gate.
+- **Idempotency keys must embed the entity id** (`send:`, `request:{id}:{event}`, `proof:{requestId}:{key}`, `review:{requestId}:{key}`, `notify:{notificationId}`). This bug class appeared twice. The notification row itself is now keyed on the triggering event (`{eventKey}:{template}:{userId}`); the job `singletonKey` embeds the notification id but does not dedupe on pg-boss `standard` queues (§1 hard gate).
 - **"Get the current X for Y" queries must `ORDER BY createdAt DESC`** or they return the oldest row.
 - pg-boss v12 needs `createQueue` before `send`/`work`/`schedule` — only visible against real pg-boss, not the fake.
 - `server-only` throws under vitest (aliased to `vitest.server-only-shim.ts`); the worker can't import `server-only` modules (hence `adapters.impl.ts`).
@@ -186,7 +193,7 @@ AGENTS.md (Part 0, 2, 3 — especially 0.5 config-not-code, 3.2 rewards, 3.3 led
 and node_modules/next/dist/docs/ before any Next.js code.
 
 Situation: main has everything through Phase 1 Timers and the notifications module
-(merge ea8c24d), lint/typecheck clean, 391 tests passing. Nothing is in flight, nothing
+(merge ea8c24d) and the hardening branch (merge f298daa), lint/typecheck clean, 412 tests passing + 4 skipped live tests. Nothing is in flight, nothing
 is pushed, no worktrees exist. PRD.md, TRD.md, USER-FLOWS.md are untracked; do not commit
 them unless I say so.
 
@@ -204,8 +211,8 @@ Do this, in order:
    then superpowers:subagent-driven-development. Models, set explicitly: implementers
    sonnet; reviewers sonnet for small diffs, opus only for the final whole-branch review and
    money/concurrency-subtle tasks. Pass briefs/reports/diffs as file paths.
-4. Do NOT wire a real EmailSender or WhatsAppGateway; the notifications hard gate in
-   SESSION-HANDOFF §1 (event-derived notification idempotency, outbox/sweep) comes first.
+4. Do NOT wire a real EmailSender or WhatsAppGateway; the remaining notifications hard gate in
+   SESSION-HANDOFF §1 (atomic claim or dedup queue policy for notify.send) comes first.
 5. When done: final review, finishing-a-development-branch with a MERGE COMMIT into main,
    re-run lint/typecheck/tests on main, DO NOT PUSH, remove the worktree, delete the
    branch, update SESSION-HANDOFF.md and commit it.
