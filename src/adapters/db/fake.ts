@@ -22,7 +22,6 @@ import {
   VerificationProofRecord,
   AdminAuditLogRecord,
   NotificationRecord,
-  NotificationChannel,
 } from "./types";
 
 function assertZeroSum(entries: PostLedgerTxnInput["entries"]): void {

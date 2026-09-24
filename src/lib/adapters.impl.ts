@@ -29,8 +29,9 @@ let cached: Adapters | undefined;
 
 /**
  * The single place the app picks fake vs. real adapters, based on env.ADAPTERS.
- * auth/storage/email have no real.ts implementation yet (Firebase, Cloud Storage,
- * and Brevo are deferred) — they always use fakes until those land, regardless
+ * auth/storage/email/whatsapp have no real.ts implementation yet (Firebase, Cloud Storage,
+ * and Brevo are deferred; WhatsAppGateway has only a fake in this plan) — they
+ * always use fakes until those land, regardless
  * of ADAPTERS. Memoized: the underlying Pool/QueueClient are constructed once
  * and reused across calls within this process.
  *

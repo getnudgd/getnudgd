@@ -35,7 +35,6 @@ import type {
   VerificationProofRecord,
   AdminAuditLogRecord,
   NotificationRecord,
-  NotificationChannel,
 } from "./types";
 import { LedgerImbalanceError, InsufficientBalanceError, RequestStateConflictError } from "./types";
 
