@@ -16,6 +16,7 @@ import {
   requestEvents,
   verificationProofs,
   adminAuditLog,
+  notifications,
 } from "../../../drizzle/schema";
 import type {
   Database,
@@ -33,6 +34,7 @@ import type {
   InsiderRequestRecord,
   VerificationProofRecord,
   AdminAuditLogRecord,
+  NotificationRecord,
 } from "./types";
 import { LedgerImbalanceError, InsufficientBalanceError, RequestStateConflictError } from "./types";
 
@@ -230,10 +232,18 @@ export function createRealDatabase(db: NodePgDatabase): Database {
         const [row] = await db.select().from(insiderProfiles).where(eq(insiderProfiles.id, insiderProfileId));
         return (row as InsiderProfileRecord) ?? null;
       },
+      async getSeekerProfileById(seekerProfileId) {
+        const [row] = await db.select().from(seekerProfiles).where(eq(seekerProfiles.id, seekerProfileId));
+        return (row as SeekerProfileRecord) ?? null;
+      },
       async setUserRole(userId, role) {
         const [row] = await db.update(users).set({ role }).where(eq(users.id, userId)).returning();
         if (!row) throw new Error(`User ${userId} not found`);
         return row as UserRecord;
+      },
+      async setUserPhone(userId, phone) {
+        const [row] = await db.update(users).set({ phone }).where(eq(users.id, userId)).returning();
+        if (!row) throw new Error(`User ${userId} not found`);
       },
     },
     resumes: {
@@ -530,6 +540,25 @@ export function createRealDatabase(db: NodePgDatabase): Database {
           .from(adminAuditLog)
           .where(and(eq(adminAuditLog.targetType, targetType), eq(adminAuditLog.targetId, targetId)));
         return rows as AdminAuditLogRecord[];
+      },
+    },
+    notifications: {
+      async create(input) {
+        const [row] = await db
+          .insert(notifications)
+          .values({ userId: input.userId, template: input.template, payload: input.payload })
+          .returning();
+        return row as NotificationRecord;
+      },
+      async getById(id) {
+        const [row] = await db.select().from(notifications).where(eq(notifications.id, id));
+        return (row as NotificationRecord) ?? null;
+      },
+      async markSent(id, channel, deliveredAt) {
+        await db.update(notifications).set({ status: "sent", channel, deliveredAt }).where(eq(notifications.id, id));
+      },
+      async markFailed(id, error) {
+        await db.update(notifications).set({ status: "failed", error }).where(eq(notifications.id, id));
       },
     },
   };

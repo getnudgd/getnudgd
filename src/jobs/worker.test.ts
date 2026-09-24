@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createFakeDatabase } from "../adapters/db/fake";
+import { createFakeEmailSender } from "../adapters/email/fake";
+import { createFakeWhatsAppGateway } from "../adapters/whatsapp/fake";
 import type { QueueClient, JobHandler } from "./queue";
 import { startWorker } from "./worker";
 
@@ -44,8 +46,10 @@ describe("startWorker", () => {
   it("registers a handler for request.expire and requests.sweep, and schedules the sweep cron hourly", async () => {
     const { db } = createFakeDatabase();
     const { queue, handlers, scheduled } = makeSpyQueue();
+    const { sender: email } = createFakeEmailSender();
+    const { gateway: whatsapp } = createFakeWhatsAppGateway();
 
-    await startWorker({ db, queue });
+    await startWorker({ db, queue, email, whatsapp });
 
     expect(handlers["request.expire"]).toBeDefined();
     expect(handlers["requests.sweep"]).toBeDefined();
@@ -79,7 +83,9 @@ describe("startWorker", () => {
     });
 
     const { queue, handlers } = makeSpyQueue();
-    await startWorker({ db, queue });
+    const { sender: email } = createFakeEmailSender();
+    const { gateway: whatsapp } = createFakeWhatsAppGateway();
+    await startWorker({ db, queue, email, whatsapp });
     await handlers["request.expire"]({ requestId: request.id });
 
     const updated = await db.requests.getById(request.id);
@@ -90,9 +96,31 @@ describe("startWorker", () => {
     const { db, seedConfig } = createFakeDatabase();
     seedConfig({ key: "rules", version: 1, placeholder: true, value: RULES_VALUE });
     const { queue, handlers } = makeSpyQueue();
+    const { sender: email } = createFakeEmailSender();
+    const { gateway: whatsapp } = createFakeWhatsAppGateway();
 
-    await startWorker({ db, queue });
+    await startWorker({ db, queue, email, whatsapp });
 
     await expect(handlers["requests.sweep"]({})).resolves.toBeUndefined();
+  });
+
+  it("registers a handler for notify.send that calls deliverNotification", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-w-notif", "wnotif@x.com", "seeker");
+    const notification = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: { requestId: "r1", companyName: "Acme" },
+    });
+    const { queue, handlers } = makeSpyQueue();
+    const { sender: email, sent } = createFakeEmailSender();
+    const { gateway: whatsapp } = createFakeWhatsAppGateway();
+
+    await startWorker({ db, queue, email, whatsapp });
+    await handlers["notify.send"]({ notificationId: notification.id });
+
+    expect(sent).toHaveLength(1);
+    const updated = await db.notifications.getById(notification.id);
+    expect(updated?.status).toBe("sent");
   });
 });

@@ -70,6 +70,7 @@ export const users = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     firebaseUid: text("firebase_uid").notNull(),
     email: text("email").notNull(),
+    phone: text("phone"),
     role: text("role").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -228,5 +229,28 @@ export const adminAuditLog = pgTable(
   },
   (table) => ({
     targetIdx: index("admin_audit_log_target_idx").on(table.targetType, table.targetId),
+  })
+);
+
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id),
+    template: text("template").notNull(),
+    payload: jsonb("payload").notNull(),
+    status: text("status").notNull().default("pending"),
+    channel: text("channel"),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    statusCheck: check("notifications_status_check", sql`${table.status} in ('pending','sent','failed')`),
+    channelCheck: check(
+      "notifications_channel_check",
+      sql`${table.channel} is null or ${table.channel} in ('whatsapp_session','whatsapp_template','email')`
+    ),
+    userIdIdx: index("notifications_user_id_idx").on(table.userId),
   })
 );

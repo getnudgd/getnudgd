@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
-import type { Database } from "../../adapters/db/types";
+import { RequestStateConflictError, type Database } from "../../adapters/db/types";
 import { createFakeQueueClient } from "../../jobs/queue.fake";
 import type { QueueClient } from "../../jobs/queue";
 import { InvalidTransitionError } from "./state";
@@ -19,6 +19,17 @@ const RULES_VALUE = {
   freeCreditGrant: 3,
   requestCostByTier: { tier1: 3, tier2: 2, tier3: 1 },
 };
+
+// Wraps a queue so that only "notify.send" fails; every other send (e.g. request.expire scheduling) still works.
+function withFailingNotifySend(queue: QueueClient): QueueClient {
+  return {
+    ...queue,
+    async send(queueName, payload, options) {
+      if (queueName === "notify.send") throw new Error("queue unavailable");
+      return queue.send(queueName, payload, options);
+    },
+  };
+}
 
 async function makeVerifiedInsiderAndFundedSeeker(
   creditGrant = 5
@@ -188,6 +199,66 @@ describe("accept", () => {
     await accept(deps, request.id);
     await expect(accept(deps, request.id)).rejects.toThrow(InvalidTransitionError);
   });
+
+  it("notifies the seeker via notify() when a request is accepted", async () => {
+    const sentJobs: Array<{ queueName: string; payload: { notificationId: string } }> = [];
+    const spyQueue: QueueClient = {
+      async start() {},
+      async stop() {},
+      async send(queueName, payload) {
+        sentJobs.push({ queueName, payload: payload as { notificationId: string } });
+        return "job-1";
+      },
+      async work() {},
+      async schedule() {},
+    };
+    const { db, seedConfig, seedCompany } = createFakeDatabase();
+    seedConfig({ key: "rules", version: 1, placeholder: true, value: RULES_VALUE });
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const seekerUser = await db.identity.findOrCreateUser("fb-acc-n1", "accn1@x.com", "seeker");
+    const seekerProfile = await db.identity.createSeekerProfile(seekerUser.id, "Accept Notify Seeker");
+    await db.ledger.postTxn({
+      idempotencyKey: "grant:accn1",
+      eventType: "credits.grant",
+      entries: [
+        { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -5 },
+        { ownerType: "seeker", ownerId: seekerProfile.id, currency: "credits", amount: 5 },
+      ],
+    });
+    const insiderUser = await db.identity.findOrCreateUser("fb-acc-n2", "accn2@acme.com", "seeker");
+    const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, "accn2@acme.com");
+    await db.identity.markInsiderVerified(insiderProfile.id, new Date());
+    const deps = { db, queue: spyQueue };
+    const request = await sendRequest(deps, {
+      idempotencyKey: "accn1",
+      seekerProfileId: seekerProfile.id,
+      insiderProfileId: insiderProfile.id,
+    });
+    sentJobs.length = 0; // discard sendRequest's own request.expire enqueue
+
+    await accept(deps, request.id);
+
+    const notifyJob = sentJobs.find((j) => j.queueName === "notify.send");
+    expect(notifyJob).toBeDefined();
+    const record = await db.notifications.getById(notifyJob!.payload.notificationId);
+    expect(record?.template).toBe("request.accepted");
+    expect(record?.userId).toBe(seekerUser.id);
+    expect(record?.payload).toEqual({ requestId: request.id, companyName: "Acme" });
+  });
+
+  it("still returns the ACCEPTED request when notify() fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const failingDeps: RequestsDeps = { db: deps.db, queue: withFailingNotifySend(deps.queue) };
+    const request = await sendRequest(failingDeps, { idempotencyKey: "accf1", seekerProfileId, insiderProfileId });
+
+    const updated = await accept(failingDeps, request.id);
+
+    expect(updated.state).toBe("ACCEPTED");
+    expect((await deps.db.requests.getById(request.id))?.state).toBe("ACCEPTED");
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
 });
 
 describe("decline", () => {
@@ -239,6 +310,67 @@ describe("decline", () => {
     // Must still refund at v1's 100%, not v2's 0%.
     expect(await db.ledger.getBalance("seeker", seekerProfile.id, "credits")).toBe(5);
   });
+
+  it("notifies the seeker via notify() when a request is declined, including the refunded amount", async () => {
+    const sentJobs: Array<{ queueName: string; payload: { notificationId: string } }> = [];
+    const spyQueue: QueueClient = {
+      async start() {},
+      async stop() {},
+      async send(queueName, payload) {
+        sentJobs.push({ queueName, payload: payload as { notificationId: string } });
+        return "job-1";
+      },
+      async work() {},
+      async schedule() {},
+    };
+    const { db, seedConfig, seedCompany } = createFakeDatabase();
+    seedConfig({ key: "rules", version: 1, placeholder: true, value: RULES_VALUE });
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const seekerUser = await db.identity.findOrCreateUser("fb-dec-n1", "decn1@x.com", "seeker");
+    const seekerProfile = await db.identity.createSeekerProfile(seekerUser.id, "Decline Notify Seeker");
+    await db.ledger.postTxn({
+      idempotencyKey: "grant:decn1",
+      eventType: "credits.grant",
+      entries: [
+        { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -5 },
+        { ownerType: "seeker", ownerId: seekerProfile.id, currency: "credits", amount: 5 },
+      ],
+    });
+    const insiderUser = await db.identity.findOrCreateUser("fb-dec-n2", "decn2@acme.com", "seeker");
+    const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, "decn2@acme.com");
+    await db.identity.markInsiderVerified(insiderProfile.id, new Date());
+    const deps = { db, queue: spyQueue };
+    const request = await sendRequest(deps, {
+      idempotencyKey: "decn1",
+      seekerProfileId: seekerProfile.id,
+      insiderProfileId: insiderProfile.id,
+    });
+    sentJobs.length = 0;
+
+    await decline(deps, request.id);
+
+    const notifyJob = sentJobs.find((j) => j.queueName === "notify.send");
+    expect(notifyJob).toBeDefined();
+    const record = await db.notifications.getById(notifyJob!.payload.notificationId);
+    expect(record?.template).toBe("request.declined");
+    expect(record?.userId).toBe(seekerUser.id);
+    expect(record?.payload).toEqual({ requestId: request.id, companyName: "Acme", refundedCredits: 3 });
+  });
+
+  it("still returns the DECLINED request and lands the refund when notify() fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const failingDeps: RequestsDeps = { db: deps.db, queue: withFailingNotifySend(deps.queue) };
+    const request = await sendRequest(failingDeps, { idempotencyKey: "decf1", seekerProfileId, insiderProfileId });
+
+    const updated = await decline(failingDeps, request.id);
+
+    expect(updated.state).toBe("DECLINED");
+    expect(await deps.db.ledger.getBalance("seeker", seekerProfileId, "credits")).toBe(5);
+    expect(await deps.db.ledger.getBalance("escrow", request.id, "credits")).toBe(0);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
 });
 
 describe("expire", () => {
@@ -270,6 +402,122 @@ describe("expire", () => {
     const second = await expire(deps, request.id);
     expect(second.state).toBe(first.state);
     expect(await deps.db.ledger.getBalance("seeker", seekerProfileId, "credits")).toBe(4);
+  });
+
+  it("notifies the seeker via notify() when a request expires, including the refunded amount", async () => {
+    const sentJobs: Array<{ queueName: string; payload: { notificationId: string } }> = [];
+    const spyQueue: QueueClient = {
+      async start() {},
+      async stop() {},
+      async send(queueName, payload) {
+        sentJobs.push({ queueName, payload: payload as { notificationId: string } });
+        return "job-1";
+      },
+      async work() {},
+      async schedule() {},
+    };
+    const { db, seedConfig, seedCompany } = createFakeDatabase();
+    seedConfig({ key: "rules", version: 1, placeholder: true, value: RULES_VALUE });
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const seekerUser = await db.identity.findOrCreateUser("fb-exp-n1", "expn1@x.com", "seeker");
+    const seekerProfile = await db.identity.createSeekerProfile(seekerUser.id, "Expire Notify Seeker");
+    await db.ledger.postTxn({
+      idempotencyKey: "grant:expn1",
+      eventType: "credits.grant",
+      entries: [
+        { ownerType: "platform", ownerId: "platform", currency: "credits", amount: -5 },
+        { ownerType: "seeker", ownerId: seekerProfile.id, currency: "credits", amount: 5 },
+      ],
+    });
+    const insiderUser = await db.identity.findOrCreateUser("fb-exp-n2", "expn2@acme.com", "seeker");
+    const insiderProfile = await db.identity.findOrCreateInsiderProfile(insiderUser.id, company.id, "expn2@acme.com");
+    await db.identity.markInsiderVerified(insiderProfile.id, new Date());
+    const deps = { db, queue: spyQueue };
+    const request = await sendRequest(deps, {
+      idempotencyKey: "expn1",
+      seekerProfileId: seekerProfile.id,
+      insiderProfileId: insiderProfile.id,
+    });
+    sentJobs.length = 0;
+
+    await expire(deps, request.id);
+
+    const notifyJob = sentJobs.find((j) => j.queueName === "notify.send");
+    expect(notifyJob).toBeDefined();
+    const record = await db.notifications.getById(notifyJob!.payload.notificationId);
+    expect(record?.template).toBe("request.expired");
+    expect(record?.userId).toBe(seekerUser.id);
+    expect(record?.payload).toEqual({ requestId: request.id, companyName: "Acme", refundedCredits: 2 });
+  });
+
+  it("still returns the EXPIRED request and lands the refund when notify() fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const failingDeps: RequestsDeps = { db: deps.db, queue: withFailingNotifySend(deps.queue) };
+    const request = await sendRequest(failingDeps, { idempotencyKey: "expf1", seekerProfileId, insiderProfileId });
+
+    const updated = await expire(failingDeps, request.id);
+
+    expect(updated.state).toBe("EXPIRED");
+    // creditCost 3, 60% refund = round(1.8) = 2, forfeit = 1
+    expect(await deps.db.ledger.getBalance("seeker", seekerProfileId, "credits")).toBe(4);
+    expect(await deps.db.ledger.getBalance("platform", "platform", "credits")).toBe(-4);
+    expect(await deps.db.ledger.getBalance("escrow", request.id, "credits")).toBe(0);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("does not notify when expire() is called on a request that is no longer SENT", async () => {
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const sentJobs: string[] = [];
+    const queue: QueueClient = {
+      ...deps.queue,
+      async send(queueName) {
+        sentJobs.push(queueName);
+        return "job-1";
+      },
+    };
+    const spyDeps: RequestsDeps = { db: deps.db, queue };
+    const request = await sendRequest(spyDeps, { idempotencyKey: "expn3", seekerProfileId, insiderProfileId });
+    await accept(spyDeps, request.id);
+    sentJobs.length = 0;
+
+    const result = await expire(spyDeps, request.id);
+
+    expect(result.state).toBe("ACCEPTED");
+    expect(sentJobs).not.toContain("notify.send");
+  });
+
+  it("does not send a duplicate notification when expire() hits its RequestStateConflictError fallback path", async () => {
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const sentJobs: string[] = [];
+    const queue: QueueClient = {
+      ...deps.queue,
+      async send(queueName) {
+        sentJobs.push(queueName);
+        return "job-1";
+      },
+    };
+    const request = await sendRequest({ db: deps.db, queue }, { idempotencyKey: "expn4", seekerProfileId, insiderProfileId });
+    sentJobs.length = 0;
+
+    // Simulate a concurrent caller winning the race: the real transition commits, then ours reports a conflict.
+    const realApplyTransition = deps.db.requests.applyTransition.bind(deps.db.requests);
+    const racingDb: Database = {
+      ...deps.db,
+      requests: {
+        ...deps.db.requests,
+        async applyTransition(input) {
+          await realApplyTransition(input);
+          throw new RequestStateConflictError(input.requestId, input.fromState, input.toState);
+        },
+      },
+    };
+
+    const result = await expire({ db: racingDb, queue }, request.id);
+
+    expect(result.state).toBe("EXPIRED");
+    expect(sentJobs).not.toContain("notify.send");
   });
 
   it("refunds using the rules_version stamped on the request, not a newer published version", async () => {

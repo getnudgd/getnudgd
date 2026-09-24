@@ -13,6 +13,8 @@ import type { StorageAdapter } from "../adapters/storage/types";
 import { createFakeStorageAdapter } from "../adapters/storage/fake";
 import type { EmailSender } from "../adapters/email/types";
 import { createFakeEmailSender } from "../adapters/email/fake";
+import type { WhatsAppGateway } from "../adapters/whatsapp/types";
+import { createFakeWhatsAppGateway } from "../adapters/whatsapp/fake";
 
 export interface Adapters {
   db: Database;
@@ -20,14 +22,16 @@ export interface Adapters {
   auth: AuthAdapter;
   storage: StorageAdapter;
   email: EmailSender;
+  whatsapp: WhatsAppGateway;
 }
 
 let cached: Adapters | undefined;
 
 /**
  * The single place the app picks fake vs. real adapters, based on env.ADAPTERS.
- * auth/storage/email have no real.ts implementation yet (Firebase, Cloud Storage,
- * and Brevo are deferred) — they always use fakes until those land, regardless
+ * auth/storage/email/whatsapp have no real.ts implementation yet (Firebase, Cloud Storage,
+ * and Brevo are deferred; WhatsAppGateway has only a fake in this plan) — they
+ * always use fakes until those land, regardless
  * of ADAPTERS. Memoized: the underlying Pool/QueueClient are constructed once
  * and reused across calls within this process.
  *
@@ -55,7 +59,9 @@ export function getAdapters(): Adapters {
   const storage: StorageAdapter = createFakeStorageAdapter();
   const email: EmailSender = createFakeEmailSender().sender;
 
-  cached = { db, queue, auth, storage, email };
+  const whatsapp: WhatsAppGateway = createFakeWhatsAppGateway().gateway;
+
+  cached = { db, queue, auth, storage, email, whatsapp };
   return cached;
 }
 

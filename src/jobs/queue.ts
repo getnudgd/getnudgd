@@ -13,6 +13,10 @@ export interface SendOptions {
    */
   singletonKey?: string;
   startAfterSeconds?: number;
+  /** Maximum number of retry attempts pg-boss makes after the first failure. */
+  retryLimit?: number;
+  /** When true, pg-boss backs off exponentially between retries instead of a fixed delay. */
+  retryBackoff?: boolean;
 }
 
 export interface QueueClient {

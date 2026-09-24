@@ -4,6 +4,7 @@ import { getRulesWithVersion } from "../config/config";
 import { UnknownCompanyTierError } from "../insiders/insiders";
 import { escrowFor, platformAccount } from "../ledger/ledger";
 import type { QueueClient } from "../../jobs/queue";
+import { notify } from "../notifications/notifications";
 import { nextState, type RequestState } from "./state";
 
 export interface RequestsDeps {
@@ -95,7 +96,7 @@ export async function accept(deps: RequestsDeps, requestId: string): Promise<Ins
   if (!record) throw new Error(`Insider request ${requestId} not found`);
   const toState = nextState(record.state as RequestState, "accept");
 
-  return deps.db.requests.applyTransition({
+  const updated = await deps.db.requests.applyTransition({
     idempotencyKey: `request:${requestId}:accept`,
     requestId,
     event: "accept",
@@ -104,6 +105,21 @@ export async function accept(deps: RequestsDeps, requestId: string): Promise<Ins
     ledgerEntries: [],
     ledgerEventType: "request.accept",
   });
+
+  try {
+    const seekerProfile = await deps.db.identity.getSeekerProfileById(record.seekerProfileId);
+    const insiderSummary = await deps.db.insiders.getInsiderById(record.insiderProfileId);
+    if (seekerProfile && insiderSummary) {
+      await notify(deps, seekerProfile.userId, "request.accepted", {
+        requestId,
+        companyName: insiderSummary.companyName,
+      });
+    }
+  } catch (err) {
+    console.error(`[requests] failed to notify on accept for request ${requestId}`, err);
+  }
+
+  return updated;
 }
 
 export async function decline(deps: RequestsDeps, requestId: string): Promise<InsiderRequestRecord> {
@@ -113,7 +129,7 @@ export async function decline(deps: RequestsDeps, requestId: string): Promise<In
   const { rules } = await getRulesWithVersion(deps, record.rulesVersion);
   const entries = refundEntries(requestId, record.seekerProfileId, record.creditCost, rules.refundPercentOnDecline);
 
-  return deps.db.requests.applyTransition({
+  const updated = await deps.db.requests.applyTransition({
     idempotencyKey: `request:${requestId}:decline`,
     requestId,
     event: "decline",
@@ -122,6 +138,23 @@ export async function decline(deps: RequestsDeps, requestId: string): Promise<In
     ledgerEntries: entries,
     ledgerEventType: "request.decline",
   });
+
+  try {
+    const seekerProfile = await deps.db.identity.getSeekerProfileById(record.seekerProfileId);
+    const insiderSummary = await deps.db.insiders.getInsiderById(record.insiderProfileId);
+    if (seekerProfile && insiderSummary) {
+      const refundedCredits = Math.round((record.creditCost * rules.refundPercentOnDecline) / 100);
+      await notify(deps, seekerProfile.userId, "request.declined", {
+        requestId,
+        companyName: insiderSummary.companyName,
+        refundedCredits,
+      });
+    }
+  } catch (err) {
+    console.error(`[requests] failed to notify on decline for request ${requestId}`, err);
+  }
+
+  return updated;
 }
 
 export async function expire(deps: RequestsDeps, requestId: string): Promise<InsiderRequestRecord> {
@@ -133,8 +166,9 @@ export async function expire(deps: RequestsDeps, requestId: string): Promise<Ins
   const { rules } = await getRulesWithVersion(deps, record.rulesVersion);
   const entries = refundEntries(requestId, record.seekerProfileId, record.creditCost, rules.refundPercentOnExpiry);
 
+  let updated: InsiderRequestRecord;
   try {
-    return await deps.db.requests.applyTransition({
+    updated = await deps.db.requests.applyTransition({
       idempotencyKey: `request:${requestId}:expire`,
       requestId,
       event: "expire",
@@ -150,6 +184,23 @@ export async function expire(deps: RequestsDeps, requestId: string): Promise<Ins
     }
     throw err;
   }
+
+  try {
+    const seekerProfile = await deps.db.identity.getSeekerProfileById(record.seekerProfileId);
+    const insiderSummary = await deps.db.insiders.getInsiderById(record.insiderProfileId);
+    if (seekerProfile && insiderSummary) {
+      const refundedCredits = Math.round((record.creditCost * rules.refundPercentOnExpiry) / 100);
+      await notify(deps, seekerProfile.userId, "request.expired", {
+        requestId,
+        companyName: insiderSummary.companyName,
+        refundedCredits,
+      });
+    }
+  } catch (err) {
+    console.error(`[requests] failed to notify on expire for request ${requestId}`, err);
+  }
+
+  return updated;
 }
 
 export async function sweepExpiredSent(deps: RequestsDeps, now: Date): Promise<InsiderRequestRecord[]> {

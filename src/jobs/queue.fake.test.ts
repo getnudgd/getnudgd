@@ -47,4 +47,18 @@ describe("createFakeQueueClient", () => {
     const queue = createFakeQueueClient();
     await expect(queue.work("resume.parse", async () => {})).rejects.toThrow();
   });
+
+  it("accepts retryLimit and retryBackoff in SendOptions without erroring", async () => {
+    const queue = createFakeQueueClient();
+    const handler = vi.fn(async () => {});
+    await queue.start();
+    await queue.work("notify.send", handler);
+    const jobId = await queue.send(
+      "notify.send",
+      { notificationId: "n1" },
+      { singletonKey: "notify:n1", retryLimit: 3, retryBackoff: true }
+    );
+    expect(jobId).not.toBeNull();
+    expect(handler).toHaveBeenCalledWith({ notificationId: "n1" });
+  });
 });

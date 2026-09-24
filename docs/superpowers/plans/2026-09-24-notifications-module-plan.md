@@ -2227,3 +2227,23 @@ git commit -m "feat(jobs): register notify.send handler in the worker, wire What
 - **Cross-file check on `admin.test.ts` (mirrors the Phase 1 Timers plan's own self-review discipline):** confirmed during plan authoring that `admin.test.ts` has exactly one bare `{ db }`-shaped call — `listPendingProofs({ db })` in its second test — and that `makeProofPendingRequest`'s `deps` already includes `queue`. This is folded into Task 6's own scope, not deferred.
 - **Review Focus, mapped to owning tasks:** invalid `notify()` payload → Task 5's "throws synchronously on a payload that fails the template's schema" test. No phone on file → Task 5's "skips WhatsApp entirely" test. Every channel failing → Task 5's "marks the notification failed and rethrows" test. `AdminDeps`'s `queue` ripple → Task 6's cross-file note and its fix. `expire()`'s conflict-fallback path double-notifying → Task 6's dedicated "does not send a duplicate notification when expire() hits its RequestStateConflictError fallback path" test.
 - **Next plan:** `rewards` on the manual vendor (points issuance per tranche, redemption requests, the PAN gate) is the next AGENTS.md §3.11 Phase 1 item after notifications, per the ordering `... → timers → email notifications → rewards on the manual vendor → Playwright flows`. Building `rewards` will let a real `pointsEarned` figure be added to the `proof.verified` template's insider-audience copy, which this plan deliberately left out since no points-issuance logic exists yet anywhere in the codebase (adding a fabricated number would have violated AGENTS.md §0.5's "business numbers are configuration, never code" — there was no config value to read it from).
+
+## Final review findings and deferred follow-ups
+
+Final whole-branch review (opus): no Critical or Important findings; ready to merge after the small fixes in the accompanying commit (unused `NotificationChannel` imports removed, stale `adapters.impl.ts` comment refreshed to include whatsapp).
+
+**HARD GATE before any real `EmailSender` or real `WhatsAppGateway` is wired** (all three must land first; today both are fakes so none of these can cause real-world harm yet):
+- (a) Event-derived idempotency for notifications (AGENTS.md Part 2.4). `applyTransition`'s idempotent-replay branch (`src/adapters/db/real.ts` and the fake) returns the current row silently, so a racing second caller of accept/decline/expire/reviewProof can re-notify. Fix: additive migration 0010 adding a unique `notifications.idempotency_key`; `create` uses `ON CONFLICT DO NOTHING` (fake and real); an optional key param on `notify()`; event-derived keys at the 5 call sites (e.g. `request:{id}:accept:notify:{template}:{audience}`).
+- (b) Outbox/sweep. `notify()` creates the `notifications` row before `queue.send`, so a failed send leaves an orphan `pending` row with no job. Add a sweep (or outbox) that re-enqueues old `pending` rows.
+- (c) `deliverNotification` throws without `markFailed` for an unknown template, an unparseable stored payload, or a missing user (the row stays `pending` across retries), and WhatsApp failure causes are dropped (only the email error is stored). Wrap and record these.
+
+**Before launch:** real Brevo `EmailSender` and real `WhatsAppGateway`. Until then the fakes are used even under `ADAPTERS=real`, so rows are marked `status=sent` without any delivery, and the fake email `sent` array grows without bound in a long-running worker (it holds recipient addresses and HTML).
+
+**Real Brevo adapter requirements:** strip CR/LF from the subject (subjects contain user-controlled `seekerName`), and make sure error text never contains the API key.
+
+**Other deferred items:**
+- The refund formula `Math.round(creditCost * pct / 100)` is duplicated in `requests.ts` (`refundEntries`, and the decline/expire notify blocks). Extract a `refundAmountFor` helper so the ledger and email copy cannot drift.
+- When Seeker onboarding lands, require `fullName` `min(1)` and trim in the Seeker profile schema. An empty `fullName` currently makes `proof.verified` (insider) and `proof.rejected` notifications fail Zod and be dropped with only a `console.error`.
+- Minor: `templates.test.ts` asserts the literal `/GetNudgd/` instead of `brand.name`; `retryLimit: 3` in `notifications.ts` is a literal (make it a named constant); real `markSent`/`markFailed` no-op on a missing id while the fake throws (existing repo pattern).
+
+**Task 7 note:** migration 0009 was confirmed by inspection (matches `schema.ts` and the snapshot; no trigger/REVOKE; `db:generate` reports no changes). Applying it to a live Postgres is still unverified.

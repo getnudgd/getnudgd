@@ -57,6 +57,7 @@ export interface UserRecord {
   id: string;
   firebaseUid: string;
   email: string;
+  phone: string | null;
   role: Role;
   createdAt: Date;
 }
@@ -152,6 +153,27 @@ export interface AdminAuditLogRecord {
   createdAt: Date;
 }
 
+export type NotificationStatus = "pending" | "sent" | "failed";
+export type NotificationChannel = "whatsapp_session" | "whatsapp_template" | "email";
+
+export interface NotificationRecord {
+  id: string;
+  userId: string;
+  template: string;
+  payload: unknown;
+  status: NotificationStatus;
+  channel: NotificationChannel | null;
+  deliveredAt: Date | null;
+  error: string | null;
+  createdAt: Date;
+}
+
+export interface CreateNotificationInput {
+  userId: string;
+  template: string;
+  payload: unknown;
+}
+
 export interface SubmitProofInput {
   idempotencyKey: string;
   requestId: string;
@@ -216,7 +238,9 @@ export interface Database {
     storeWorkEmailOtp(insiderProfileId: string, codeHash: string, expiresAt: Date): Promise<void>;
     consumeWorkEmailOtp(insiderProfileId: string, codeHash: string, now: Date): Promise<boolean>;
     getInsiderProfileById(insiderProfileId: string): Promise<InsiderProfileRecord | null>;
+    getSeekerProfileById(seekerProfileId: string): Promise<SeekerProfileRecord | null>;
     setUserRole(userId: string, role: Role): Promise<UserRecord>;
+    setUserPhone(userId: string, phone: string): Promise<void>;
   };
   resumes: {
     registerUpload(seekerProfileId: string, objectKey: string, originalFilename: string): Promise<ResumeRecord>;
@@ -237,5 +261,11 @@ export interface Database {
     getProofByRequestId(requestId: string): Promise<VerificationProofRecord | null>;
     listProofsByRequestId(requestId: string): Promise<VerificationProofRecord[]>;
     listAuditLogByTarget(targetType: string, targetId: string): Promise<AdminAuditLogRecord[]>;
+  };
+  notifications: {
+    create(input: CreateNotificationInput): Promise<NotificationRecord>;
+    getById(id: string): Promise<NotificationRecord | null>;
+    markSent(id: string, channel: NotificationChannel, deliveredAt: Date): Promise<void>;
+    markFailed(id: string, error: string): Promise<void>;
   };
 }

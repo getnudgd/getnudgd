@@ -15,6 +15,8 @@ export function createRealQueueClient(connectionString: string): QueueClient {
       return boss.send(queueName, payload as object, {
         singletonKey: options?.singletonKey,
         startAfter: options?.startAfterSeconds,
+        retryLimit: options?.retryLimit,
+        retryBackoff: options?.retryBackoff,
       });
     },
     async work(queueName, handler) {

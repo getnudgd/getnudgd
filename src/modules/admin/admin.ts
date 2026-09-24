@@ -1,8 +1,11 @@
 import type { Database, InsiderRequestRecord, VerificationProofRecord } from "../../adapters/db/types";
+import type { QueueClient } from "../../jobs/queue";
 import { nextState, type RequestState } from "../requests/state";
+import { notify } from "../notifications/notifications";
 
 export interface AdminDeps {
   db: Database;
+  queue: QueueClient;
 }
 
 export class MissingRejectionReasonError extends Error {
@@ -22,6 +25,19 @@ export interface ReviewProofInput {
   reason?: string;
 }
 
+async function notifyOrLog(
+  deps: AdminDeps,
+  userId: string,
+  template: Parameters<typeof notify>[2],
+  payload: unknown
+): Promise<void> {
+  try {
+    await notify(deps, userId, template, payload);
+  } catch (err) {
+    console.error(`[admin] failed to send ${template} notification to user ${userId}`, err);
+  }
+}
+
 export async function reviewProof(deps: AdminDeps, input: ReviewProofInput): Promise<InsiderRequestRecord> {
   if (input.decision === "reject" && !input.reason) {
     throw new MissingRejectionReasonError();
@@ -33,7 +49,7 @@ export async function reviewProof(deps: AdminDeps, input: ReviewProofInput): Pro
   const event = input.decision === "verify" ? "verify" : "reject";
   const toState = nextState(record.state as RequestState, event);
 
-  return deps.db.requests.applyTransition({
+  const updated = await deps.db.requests.applyTransition({
     idempotencyKey: `review:${input.requestId}:${input.idempotencyKey}`,
     requestId: input.requestId,
     event,
@@ -49,6 +65,38 @@ export async function reviewProof(deps: AdminDeps, input: ReviewProofInput): Pro
       detail: input.reason,
     },
   });
+
+  try {
+    const insiderProfile = await deps.db.identity.getInsiderProfileById(record.insiderProfileId);
+    const insiderSummary = await deps.db.insiders.getInsiderById(record.insiderProfileId);
+    const seekerProfile = await deps.db.identity.getSeekerProfileById(record.seekerProfileId);
+
+    if (input.decision === "verify") {
+      if (insiderProfile && insiderSummary && seekerProfile) {
+        await notifyOrLog(deps, insiderProfile.userId, "proof.verified", {
+          requestId: input.requestId,
+          companyName: insiderSummary.companyName,
+          audience: "insider",
+          seekerName: seekerProfile.fullName,
+        });
+        await notifyOrLog(deps, seekerProfile.userId, "proof.verified", {
+          requestId: input.requestId,
+          companyName: insiderSummary.companyName,
+          audience: "seeker",
+        });
+      }
+    } else if (insiderProfile && seekerProfile) {
+      await notifyOrLog(deps, insiderProfile.userId, "proof.rejected", {
+        requestId: input.requestId,
+        seekerName: seekerProfile.fullName,
+        reason: input.reason ?? "",
+      });
+    }
+  } catch (err) {
+    console.error(`[admin] failed to load notification recipients for request ${input.requestId}`, err);
+  }
+
+  return updated;
 }
 
 export interface PendingProof {
