@@ -391,6 +391,8 @@ export function createFakeDatabase(): {
     },
     notifications: {
       async create(input) {
+        const existing = notificationRows.find((n) => n.idempotencyKey === input.idempotencyKey);
+        if (existing) return { record: existing, created: false };
         const record: NotificationRecord = {
           id: genId(),
           userId: input.userId,
@@ -400,10 +402,11 @@ export function createFakeDatabase(): {
           channel: null,
           deliveredAt: null,
           error: null,
+          idempotencyKey: input.idempotencyKey,
           createdAt: new Date(),
         };
         notificationRows.push(record);
-        return record;
+        return { record, created: true };
       },
       async getById(id) {
         return notificationRows.find((n) => n.id === id) ?? null;

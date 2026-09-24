@@ -13,11 +13,21 @@ export async function notify(
   deps: NotifyDeps,
   userId: string,
   template: TemplateName,
-  payload: unknown
+  payload: unknown,
+  eventKey: string
 ): Promise<void> {
   const definition = templates[template];
   const parsedPayload = definition.payloadSchema.parse(payload);
-  const record = await deps.db.notifications.create({ userId, template, payload: parsedPayload });
+  const { record, created } = await deps.db.notifications.create({
+    userId,
+    template,
+    payload: parsedPayload,
+    idempotencyKey: `${eventKey}:${template}:${userId}`,
+  });
+  // A replayed event (e.g. a racing second caller of the same transition) finds
+  // the row already exists; it must not enqueue a second delivery. A row whose
+  // first enqueue failed is re-enqueued by sweepPendingNotifications.
+  if (!created) return;
   await deps.queue.send(
     "notify.send",
     { notificationId: record.id },

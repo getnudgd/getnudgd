@@ -699,10 +699,11 @@ describe("createFakeDatabase notifications", () => {
   it("creates a pending notification with no channel and no deliveredAt", async () => {
     const { db } = createFakeDatabase();
     const user = await db.identity.findOrCreateUser("fb-notif1", "notif1@x.com", "seeker");
-    const record = await db.notifications.create({
+    const { record } = await db.notifications.create({
       userId: user.id,
       template: "request.accepted",
       payload: { requestId: "r1", companyName: "Acme" },
+      idempotencyKey: "test:k1",
     });
     expect(record.status).toBe("pending");
     expect(record.channel).toBeNull();
@@ -718,7 +719,12 @@ describe("createFakeDatabase notifications", () => {
   it("markSent sets status, channel, and deliveredAt", async () => {
     const { db } = createFakeDatabase();
     const user = await db.identity.findOrCreateUser("fb-notif2", "notif2@x.com", "seeker");
-    const record = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {} });
+    const { record } = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: {},
+      idempotencyKey: "test:k2",
+    });
     const when = new Date();
     await db.notifications.markSent(record.id, "email", when);
     const updated = await db.notifications.getById(record.id);
@@ -730,10 +736,49 @@ describe("createFakeDatabase notifications", () => {
   it("markFailed sets status and error", async () => {
     const { db } = createFakeDatabase();
     const user = await db.identity.findOrCreateUser("fb-notif3", "notif3@x.com", "seeker");
-    const record = await db.notifications.create({ userId: user.id, template: "request.accepted", payload: {} });
+    const { record } = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: {},
+      idempotencyKey: "test:k3",
+    });
     await db.notifications.markFailed(record.id, "all channels failed");
     const updated = await db.notifications.getById(record.id);
     expect(updated?.status).toBe("failed");
     expect(updated?.error).toBe("all channels failed");
+  });
+
+  it("create returns created=true and the record for a new idempotency key", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-idem-1", "idem1@x.com", "seeker");
+    const result = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: { a: 1 },
+      idempotencyKey: "evt:1:request.accepted:u",
+    });
+    expect(result.created).toBe(true);
+    expect(result.record.idempotencyKey).toBe("evt:1:request.accepted:u");
+    expect(result.record.status).toBe("pending");
+  });
+
+  it("create with an existing idempotency key returns the original record with created=false and adds no row", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-idem-2", "idem2@x.com", "seeker");
+    const first = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: { a: 1 },
+      idempotencyKey: "evt:2:request.accepted:u",
+    });
+    const second = await db.notifications.create({
+      userId: user.id,
+      template: "request.accepted",
+      payload: { a: 2 },
+      idempotencyKey: "evt:2:request.accepted:u",
+    });
+    expect(second.created).toBe(false);
+    expect(second.record.id).toBe(first.record.id);
+    expect(second.record.payload).toEqual({ a: 1 });
   });
 });

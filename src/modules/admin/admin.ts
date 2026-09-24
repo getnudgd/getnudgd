@@ -29,10 +29,11 @@ async function notifyOrLog(
   deps: AdminDeps,
   userId: string,
   template: Parameters<typeof notify>[2],
-  payload: unknown
+  payload: unknown,
+  eventKey: string
 ): Promise<void> {
   try {
-    await notify(deps, userId, template, payload);
+    await notify(deps, userId, template, payload, eventKey);
   } catch (err) {
     console.error(`[admin] failed to send ${template} notification to user ${userId}`, err);
   }
@@ -49,8 +50,10 @@ export async function reviewProof(deps: AdminDeps, input: ReviewProofInput): Pro
   const event = input.decision === "verify" ? "verify" : "reject";
   const toState = nextState(record.state as RequestState, event);
 
+  const transitionKey = `review:${input.requestId}:${input.idempotencyKey}`;
+
   const updated = await deps.db.requests.applyTransition({
-    idempotencyKey: `review:${input.requestId}:${input.idempotencyKey}`,
+    idempotencyKey: transitionKey,
     requestId: input.requestId,
     event,
     fromState: record.state,
@@ -73,24 +76,42 @@ export async function reviewProof(deps: AdminDeps, input: ReviewProofInput): Pro
 
     if (input.decision === "verify") {
       if (insiderProfile && insiderSummary && seekerProfile) {
-        await notifyOrLog(deps, insiderProfile.userId, "proof.verified", {
-          requestId: input.requestId,
-          companyName: insiderSummary.companyName,
-          audience: "insider",
-          seekerName: seekerProfile.fullName,
-        });
-        await notifyOrLog(deps, seekerProfile.userId, "proof.verified", {
-          requestId: input.requestId,
-          companyName: insiderSummary.companyName,
-          audience: "seeker",
-        });
+        await notifyOrLog(
+          deps,
+          insiderProfile.userId,
+          "proof.verified",
+          {
+            requestId: input.requestId,
+            companyName: insiderSummary.companyName,
+            audience: "insider",
+            seekerName: seekerProfile.fullName,
+          },
+          transitionKey
+        );
+        await notifyOrLog(
+          deps,
+          seekerProfile.userId,
+          "proof.verified",
+          {
+            requestId: input.requestId,
+            companyName: insiderSummary.companyName,
+            audience: "seeker",
+          },
+          transitionKey
+        );
       }
     } else if (insiderProfile && seekerProfile) {
-      await notifyOrLog(deps, insiderProfile.userId, "proof.rejected", {
-        requestId: input.requestId,
-        seekerName: seekerProfile.fullName,
-        reason: input.reason ?? "",
-      });
+      await notifyOrLog(
+        deps,
+        insiderProfile.userId,
+        "proof.rejected",
+        {
+          requestId: input.requestId,
+          seekerName: seekerProfile.fullName,
+          reason: input.reason ?? "",
+        },
+        transitionKey
+      );
     }
   } catch (err) {
     console.error(`[admin] failed to load notification recipients for request ${input.requestId}`, err);

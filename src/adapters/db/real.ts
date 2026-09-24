@@ -544,11 +544,25 @@ export function createRealDatabase(db: NodePgDatabase): Database {
     },
     notifications: {
       async create(input) {
-        const [row] = await db
+        const [inserted] = await db
           .insert(notifications)
-          .values({ userId: input.userId, template: input.template, payload: input.payload })
+          .values({
+            userId: input.userId,
+            template: input.template,
+            payload: input.payload,
+            idempotencyKey: input.idempotencyKey,
+          })
+          .onConflictDoNothing({ target: notifications.idempotencyKey })
           .returning();
-        return row as NotificationRecord;
+        if (inserted) return { record: inserted as NotificationRecord, created: true };
+        const [existing] = await db
+          .select()
+          .from(notifications)
+          .where(eq(notifications.idempotencyKey, input.idempotencyKey));
+        if (!existing) {
+          throw new Error(`Notification with idempotency key ${input.idempotencyKey} vanished after a conflict`);
+        }
+        return { record: existing as NotificationRecord, created: false };
       },
       async getById(id) {
         const [row] = await db.select().from(notifications).where(eq(notifications.id, id));

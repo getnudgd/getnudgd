@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
 import { createFakeQueueClient } from "../../jobs/queue.fake";
+import type { Database } from "../../adapters/db/types";
 import type { QueueClient } from "../../jobs/queue";
 import { sendRequest, accept, submitProof, type RequestsDeps } from "../requests/requests";
 import { reviewProof, listPendingProofs, MissingRejectionReasonError, type AdminDeps } from "./admin";
@@ -216,6 +217,28 @@ describe("reviewProof", () => {
     expect(record?.userId).toBe(seekerProfile!.userId);
     expect(record?.payload).toMatchObject({ audience: "seeker" });
     consoleError.mockRestore();
+  });
+
+  it("does not send second notifications when a racing caller replays the same verify", async () => {
+    const { deps, requestId } = await makeProofPendingRequest();
+    const { queue, notificationIds } = recordNotifySends(deps.queue);
+    const recordingDeps: AdminDeps = { db: deps.db, queue };
+    const staleSnapshot = { ...(await deps.db.requests.getById(requestId))! }; // copy: the fake returns live rows; still PROOF_PENDING
+    const input = { idempotencyKey: "replayrev1", adminUserId: "admin-1", requestId, decision: "verify" as const };
+
+    await reviewProof(recordingDeps, input);
+    expect(notificationIds).toHaveLength(2);
+
+    // Second caller read the request before the first committed, so it passes
+    // the state check and reaches applyTransition's idempotent-replay branch.
+    const racingDb: Database = {
+      ...deps.db,
+      requests: { ...deps.db.requests, getById: async () => staleSnapshot },
+    };
+    const replayed = await reviewProof({ db: racingDb, queue }, input);
+
+    expect(replayed.state).toBe("SUBMITTED");
+    expect(notificationIds).toHaveLength(2);
   });
 });
 

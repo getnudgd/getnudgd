@@ -26,7 +26,7 @@ describe("notify", () => {
       async schedule() {},
     };
 
-    await notify({ db, queue: spyQueue }, user.id, "request.accepted", { requestId: "r1", companyName: "Acme" });
+    await notify({ db, queue: spyQueue }, user.id, "request.accepted", { requestId: "r1", companyName: "Acme" }, "evt:n1");
 
     expect(sentJobs).toHaveLength(1);
     expect(sentJobs[0].queueName).toBe("notify.send");
@@ -51,10 +51,51 @@ describe("notify", () => {
     const createSpy = vi.spyOn(db.notifications, "create");
 
     await expect(
-      notify({ db, queue }, user.id, "request.accepted", { requestId: "r1" }) // missing companyName
+      notify({ db, queue }, user.id, "request.accepted", { requestId: "r1" }, "evt:n2") // missing companyName
     ).rejects.toThrow();
     expect(sendSpy).not.toHaveBeenCalled();
     expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not create a second row or enqueue a second job for the same event, template and user", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-n-dup", "ndup@x.com", "seeker");
+    const sent: string[] = [];
+    const spyQueue: QueueClient = {
+      async start() {},
+      async stop() {},
+      async send(queueName) {
+        sent.push(queueName);
+        return "job";
+      },
+      async work() {},
+      async schedule() {},
+    };
+    const payload = { requestId: "r1", companyName: "Acme" };
+    await notify({ db, queue: spyQueue }, user.id, "request.accepted", payload, "request:r1:accept");
+    await notify({ db, queue: spyQueue }, user.id, "request.accepted", payload, "request:r1:accept");
+    expect(sent.filter((q) => q === "notify.send")).toHaveLength(1);
+  });
+
+  it("notifies two different recipients of the same event and template", async () => {
+    const { db } = createFakeDatabase();
+    const a = await db.identity.findOrCreateUser("fb-n-a", "na@x.com", "seeker");
+    const b = await db.identity.findOrCreateUser("fb-n-b", "nb@x.com", "seeker");
+    const sent: string[] = [];
+    const spyQueue: QueueClient = {
+      async start() {},
+      async stop() {},
+      async send(queueName) {
+        sent.push(queueName);
+        return "job";
+      },
+      async work() {},
+      async schedule() {},
+    };
+    const payload = { requestId: "r1", companyName: "Acme", audience: "seeker" };
+    await notify({ db, queue: spyQueue }, a.id, "proof.verified", payload, "review:r1:k1");
+    await notify({ db, queue: spyQueue }, b.id, "proof.verified", payload, "review:r1:k1");
+    expect(sent.filter((q) => q === "notify.send")).toHaveLength(2);
   });
 });
 
@@ -63,10 +104,11 @@ describe("deliverNotification", () => {
     const { db } = createFakeDatabase();
     const user = await db.identity.findOrCreateUser(`fb-dn-${Math.random()}`, `dn${Math.random()}@x.com`, "seeker");
     if (overrides?.phone) await db.identity.setUserPhone(user.id, overrides.phone);
-    const record = await db.notifications.create({
+    const { record } = await db.notifications.create({
       userId: user.id,
       template: "request.accepted",
       payload: { requestId: "r1", companyName: "Acme" },
+      idempotencyKey: `seed:${user.id}`,
     });
     return { db, user, record };
   }

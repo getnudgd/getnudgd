@@ -107,10 +107,11 @@ describe("startWorker", () => {
   it("registers a handler for notify.send that calls deliverNotification", async () => {
     const { db } = createFakeDatabase();
     const user = await db.identity.findOrCreateUser("fb-w-notif", "wnotif@x.com", "seeker");
-    const notification = await db.notifications.create({
+    const { record: notification } = await db.notifications.create({
       userId: user.id,
       template: "request.accepted",
       payload: { requestId: "r1", companyName: "Acme" },
+      idempotencyKey: "seed:worker-notify",
     });
     const { queue, handlers } = makeSpyQueue();
     const { sender: email, sent } = createFakeEmailSender();
