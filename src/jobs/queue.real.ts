@@ -12,12 +12,19 @@ export function createRealQueueClient(connectionString: string): QueueClient {
     },
     async send(queueName, payload, options) {
       await boss.createQueue(queueName);
-      return boss.send(queueName, payload as object, {
-        singletonKey: options?.singletonKey,
-        startAfter: options?.startAfterSeconds,
-        retryLimit: options?.retryLimit,
-        retryBackoff: options?.retryBackoff,
-      });
+      // pg-boss validates with `key in config`, so an explicit undefined value
+      // throws. Only include keys the caller actually set.
+      const bossOptions: {
+        singletonKey?: string;
+        startAfter?: number;
+        retryLimit?: number;
+        retryBackoff?: boolean;
+      } = {};
+      if (options?.singletonKey !== undefined) bossOptions.singletonKey = options.singletonKey;
+      if (options?.startAfterSeconds !== undefined) bossOptions.startAfter = options.startAfterSeconds;
+      if (options?.retryLimit !== undefined) bossOptions.retryLimit = options.retryLimit;
+      if (options?.retryBackoff !== undefined) bossOptions.retryBackoff = options.retryBackoff;
+      return boss.send(queueName, payload as object, bossOptions);
     },
     async work(queueName, handler) {
       await boss.createQueue(queueName);
