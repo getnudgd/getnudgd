@@ -793,9 +793,6 @@ describe.skipIf(!live)("notifications against real Postgres and pg-boss", () => 
     expect(rows.every((r) => r.status === "pending")).toBe(true);
     const times = rows.map((r) => r.createdAt.getTime());
     expect([...times].sort((a, b) => a - b)).toEqual(times);
-    expect(await db.notifications.listPendingOlderThan(new Date(Date.now() - 24 * 60 * 60 * 1000), 5)).toEqual(
-      rows.filter(() => false)
-    );
   });
 
   it("real pg-boss accepts a send with no retry options and a send with them (regression: undefined option keys)", async () => {
@@ -811,7 +808,7 @@ describe.skipIf(!live)("notifications against real Postgres and pg-boss", () => 
   });
 });
 ```
-Simplify the odd last assertion of the `listPendingOlderThan` test if it is not meaningful once you run it (an empty result for a cutoff 24h in the past is only guaranteed on a database with no old pending rows — if the dev DB contains older pending rows this assertion is wrong; replace it with `expect((await db.notifications.listPendingOlderThan(new Date(0), 5)).every((r) => r.createdAt.getTime() < 1)).toBe(true)`-style logic, or simply drop that assertion). Do not leave a test that depends on the dev DB being empty.
+Note: the test deliberately makes no assumption that the dev database is otherwise empty.
 
 - [ ] **Step 2: Run it live**
 
