@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
 import { createFakeQueueClient } from "../../jobs/queue.fake";
+import type { QueueClient } from "../../jobs/queue";
 import { sendRequest, accept, submitProof, type RequestsDeps } from "../requests/requests";
 import { reviewProof, listPendingProofs, MissingRejectionReasonError, type AdminDeps } from "./admin";
 
@@ -17,6 +18,19 @@ const RULES_VALUE = {
   freeCreditGrant: 3,
   requestCostByTier: { tier1: 3, tier2: 2, tier3: 1 },
 };
+
+// Records the notificationId of every "notify.send" job that is enqueued, so tests can look the rows up.
+function recordNotifySends(base: QueueClient): { queue: QueueClient; notificationIds: string[] } {
+  const notificationIds: string[] = [];
+  const queue: QueueClient = {
+    ...base,
+    async send(queueName, payload, options) {
+      if (queueName === "notify.send") notificationIds.push((payload as { notificationId: string }).notificationId);
+      return base.send(queueName, payload, options);
+    },
+  };
+  return { queue, notificationIds };
+}
 
 async function makeProofPendingRequest(): Promise<{ deps: AdminDeps & RequestsDeps; requestId: string }> {
   const { db, seedConfig, seedCompany } = createFakeDatabase();
@@ -102,21 +116,32 @@ describe("reviewProof", () => {
     expect(secondReject.state).toBe("ACCEPTED");
   });
 
-  it("notifies the insider and the seeker on verify", async () => {
+  it("notifies the insider and the seeker on verify, each with the right audience", async () => {
     const { deps, requestId } = await makeProofPendingRequest();
-    const notifySpy = vi.spyOn(deps.queue, "send");
+    const { queue, notificationIds } = recordNotifySends(deps.queue);
+    const recordingDeps: AdminDeps = { db: deps.db, queue };
 
-    await reviewProof(deps, { idempotencyKey: "notifrev1", adminUserId: "admin-1", requestId, decision: "verify" });
+    await reviewProof(recordingDeps, { idempotencyKey: "notifrev1", adminUserId: "admin-1", requestId, decision: "verify" });
 
-    const notifyCalls = notifySpy.mock.calls.filter(([queueName]) => queueName === "notify.send");
-    expect(notifyCalls).toHaveLength(2);
+    expect(notificationIds).toHaveLength(2);
+    const request = await deps.db.requests.getById(requestId);
+    const insiderProfile = await deps.db.identity.getInsiderProfileById(request!.insiderProfileId);
+    const seekerProfile = await deps.db.identity.getSeekerProfileById(request!.seekerProfileId);
+    const records = await Promise.all(notificationIds.map((id) => deps.db.notifications.getById(id)));
+    const insiderRecord = records.find((r) => r?.userId === insiderProfile!.userId);
+    const seekerRecord = records.find((r) => r?.userId === seekerProfile!.userId);
+    expect(insiderRecord?.template).toBe("proof.verified");
+    expect(insiderRecord?.payload).toMatchObject({ audience: "insider" });
+    expect(seekerRecord?.template).toBe("proof.verified");
+    expect(seekerRecord?.payload).toMatchObject({ audience: "seeker" });
   });
 
   it("notifies only the insider on reject", async () => {
     const { deps, requestId } = await makeProofPendingRequest();
-    const notifySpy = vi.spyOn(deps.queue, "send");
+    const { queue, notificationIds } = recordNotifySends(deps.queue);
+    const recordingDeps: AdminDeps = { db: deps.db, queue };
 
-    await reviewProof(deps, {
+    await reviewProof(recordingDeps, {
       idempotencyKey: "notifrev2",
       adminUserId: "admin-1",
       requestId,
@@ -124,8 +149,73 @@ describe("reviewProof", () => {
       reason: "Screenshot was unreadable",
     });
 
-    const notifyCalls = notifySpy.mock.calls.filter(([queueName]) => queueName === "notify.send");
-    expect(notifyCalls).toHaveLength(1);
+    expect(notificationIds).toHaveLength(1);
+    const request = await deps.db.requests.getById(requestId);
+    const insiderProfile = await deps.db.identity.getInsiderProfileById(request!.insiderProfileId);
+    const record = await deps.db.notifications.getById(notificationIds[0]);
+    expect(record?.userId).toBe(insiderProfile!.userId);
+    expect(record?.template).toBe("proof.rejected");
+    expect(record?.payload).toMatchObject({ reason: "Screenshot was unreadable" });
+  });
+
+  it("still verifies the proof and returns normally when every notify() fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { deps, requestId } = await makeProofPendingRequest();
+    const failingDeps: AdminDeps = {
+      db: deps.db,
+      queue: {
+        ...deps.queue,
+        async send(queueName, payload, options) {
+          if (queueName === "notify.send") throw new Error("queue unavailable");
+          return deps.queue.send(queueName, payload, options);
+        },
+      },
+    };
+
+    const updated = await reviewProof(failingDeps, {
+      idempotencyKey: "notiffail1",
+      adminUserId: "admin-1",
+      requestId,
+      decision: "verify",
+    });
+
+    expect(updated.state).toBe("SUBMITTED");
+    expect((await deps.db.requests.getById(requestId))?.state).toBe("SUBMITTED");
+    expect(await deps.db.requests.listAuditLogByTarget("insider_request", requestId)).toHaveLength(1);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("still notifies the seeker when the insider notify() fails on verify", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { deps, requestId } = await makeProofPendingRequest();
+    const { queue, notificationIds } = recordNotifySends(deps.queue);
+    let notifyCalls = 0;
+    const flakyDeps: AdminDeps = {
+      db: deps.db,
+      queue: {
+        ...queue,
+        async send(queueName, payload, options) {
+          if (queueName === "notify.send") {
+            notifyCalls += 1;
+            if (notifyCalls === 1) throw new Error("queue unavailable");
+          }
+          return queue.send(queueName, payload, options);
+        },
+      },
+    };
+
+    const updated = await reviewProof(flakyDeps, { idempotencyKey: "notiffail2", adminUserId: "admin-1", requestId, decision: "verify" });
+
+    expect(updated.state).toBe("SUBMITTED");
+    expect(notifyCalls).toBe(2);
+    expect(notificationIds).toHaveLength(1);
+    const request = await deps.db.requests.getById(requestId);
+    const seekerProfile = await deps.db.identity.getSeekerProfileById(request!.seekerProfileId);
+    const record = await deps.db.notifications.getById(notificationIds[0]);
+    expect(record?.userId).toBe(seekerProfile!.userId);
+    expect(record?.payload).toMatchObject({ audience: "seeker" });
+    consoleError.mockRestore();
   });
 });
 

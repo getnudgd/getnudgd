@@ -25,6 +25,19 @@ export interface ReviewProofInput {
   reason?: string;
 }
 
+async function notifyOrLog(
+  deps: AdminDeps,
+  userId: string,
+  template: Parameters<typeof notify>[2],
+  payload: unknown
+): Promise<void> {
+  try {
+    await notify(deps, userId, template, payload);
+  } catch (err) {
+    console.error(`[admin] failed to send ${template} notification to user ${userId}`, err);
+  }
+}
+
 export async function reviewProof(deps: AdminDeps, input: ReviewProofInput): Promise<InsiderRequestRecord> {
   if (input.decision === "reject" && !input.reason) {
     throw new MissingRejectionReasonError();
@@ -60,27 +73,27 @@ export async function reviewProof(deps: AdminDeps, input: ReviewProofInput): Pro
 
     if (input.decision === "verify") {
       if (insiderProfile && insiderSummary && seekerProfile) {
-        await notify(deps, insiderProfile.userId, "proof.verified", {
+        await notifyOrLog(deps, insiderProfile.userId, "proof.verified", {
           requestId: input.requestId,
           companyName: insiderSummary.companyName,
           audience: "insider",
           seekerName: seekerProfile.fullName,
         });
-        await notify(deps, seekerProfile.userId, "proof.verified", {
+        await notifyOrLog(deps, seekerProfile.userId, "proof.verified", {
           requestId: input.requestId,
           companyName: insiderSummary.companyName,
           audience: "seeker",
         });
       }
     } else if (insiderProfile && seekerProfile) {
-      await notify(deps, insiderProfile.userId, "proof.rejected", {
+      await notifyOrLog(deps, insiderProfile.userId, "proof.rejected", {
         requestId: input.requestId,
         seekerName: seekerProfile.fullName,
         reason: input.reason ?? "",
       });
     }
   } catch (err) {
-    console.error(`[admin] failed to notify on reviewProof(${input.decision}) for request ${input.requestId}`, err);
+    console.error(`[admin] failed to load notification recipients for request ${input.requestId}`, err);
   }
 
   return updated;

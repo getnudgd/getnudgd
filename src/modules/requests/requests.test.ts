@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
 import { RequestStateConflictError, type Database } from "../../adapters/db/types";
 import { createFakeQueueClient } from "../../jobs/queue.fake";
@@ -19,6 +19,17 @@ const RULES_VALUE = {
   freeCreditGrant: 3,
   requestCostByTier: { tier1: 3, tier2: 2, tier3: 1 },
 };
+
+// Wraps a queue so that only "notify.send" fails; every other send (e.g. request.expire scheduling) still works.
+function withFailingNotifySend(queue: QueueClient): QueueClient {
+  return {
+    ...queue,
+    async send(queueName, payload, options) {
+      if (queueName === "notify.send") throw new Error("queue unavailable");
+      return queue.send(queueName, payload, options);
+    },
+  };
+}
 
 async function makeVerifiedInsiderAndFundedSeeker(
   creditGrant = 5
@@ -234,6 +245,20 @@ describe("accept", () => {
     expect(record?.userId).toBe(seekerUser.id);
     expect(record?.payload).toEqual({ requestId: request.id, companyName: "Acme" });
   });
+
+  it("still returns the ACCEPTED request when notify() fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const failingDeps: RequestsDeps = { db: deps.db, queue: withFailingNotifySend(deps.queue) };
+    const request = await sendRequest(failingDeps, { idempotencyKey: "accf1", seekerProfileId, insiderProfileId });
+
+    const updated = await accept(failingDeps, request.id);
+
+    expect(updated.state).toBe("ACCEPTED");
+    expect((await deps.db.requests.getById(request.id))?.state).toBe("ACCEPTED");
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
 });
 
 describe("decline", () => {
@@ -331,6 +356,21 @@ describe("decline", () => {
     expect(record?.userId).toBe(seekerUser.id);
     expect(record?.payload).toEqual({ requestId: request.id, companyName: "Acme", refundedCredits: 3 });
   });
+
+  it("still returns the DECLINED request and lands the refund when notify() fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const failingDeps: RequestsDeps = { db: deps.db, queue: withFailingNotifySend(deps.queue) };
+    const request = await sendRequest(failingDeps, { idempotencyKey: "decf1", seekerProfileId, insiderProfileId });
+
+    const updated = await decline(failingDeps, request.id);
+
+    expect(updated.state).toBe("DECLINED");
+    expect(await deps.db.ledger.getBalance("seeker", seekerProfileId, "credits")).toBe(5);
+    expect(await deps.db.ledger.getBalance("escrow", request.id, "credits")).toBe(0);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
 });
 
 describe("expire", () => {
@@ -408,6 +448,23 @@ describe("expire", () => {
     expect(record?.template).toBe("request.expired");
     expect(record?.userId).toBe(seekerUser.id);
     expect(record?.payload).toEqual({ requestId: request.id, companyName: "Acme", refundedCredits: 2 });
+  });
+
+  it("still returns the EXPIRED request and lands the refund when notify() fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { deps, seekerProfileId, insiderProfileId } = await makeVerifiedInsiderAndFundedSeeker(5);
+    const failingDeps: RequestsDeps = { db: deps.db, queue: withFailingNotifySend(deps.queue) };
+    const request = await sendRequest(failingDeps, { idempotencyKey: "expf1", seekerProfileId, insiderProfileId });
+
+    const updated = await expire(failingDeps, request.id);
+
+    expect(updated.state).toBe("EXPIRED");
+    // creditCost 3, 60% refund = round(1.8) = 2, forfeit = 1
+    expect(await deps.db.ledger.getBalance("seeker", seekerProfileId, "credits")).toBe(4);
+    expect(await deps.db.ledger.getBalance("platform", "platform", "credits")).toBe(-4);
+    expect(await deps.db.ledger.getBalance("escrow", request.id, "credits")).toBe(0);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 
   it("does not notify when expire() is called on a request that is no longer SENT", async () => {
