@@ -69,7 +69,7 @@ export async function reviewProof(deps: AdminDeps, input: ReviewProofInput): Pro
 
   const transitionKey = `review:${input.requestId}:${input.idempotencyKey}`;
 
-  // Compute (and validate) the tranche-1 payout BEFORE applyTransition runs, so
+  // Compute (and validate) the tranche-1 points BEFORE applyTransition runs, so
   // a RewardsNotConfiguredError/ConfigNotFoundError here throws before any
   // state change — a proof must never verify without its points being resolved.
   let tranche1Points = 0;

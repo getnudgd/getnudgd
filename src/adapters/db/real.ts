@@ -407,6 +407,20 @@ export function createRealDatabase(db: NodePgDatabase): Database {
     // a raw Postgres serialization-failure error that this code does not catch or retry —
     // whoever wires the real connection pool must either pin READ COMMITTED or add a
     // serialization-failure retry wrapper around these transactions.
+    //
+    // sendRequest's overspend protection below (SELECT ... FOR UPDATE on the seeker's ledger
+    // account, then a separate SELECT summing ledgerEntries for the balance) has a sharper
+    // dependency on the same isolation level: under READ COMMITTED, the balance SELECT takes
+    // a fresh snapshot once the lock is acquired, so it correctly sees any concurrent spend
+    // that committed while this transaction waited on the lock. Under REPEATABLE READ, the
+    // whole transaction shares one snapshot taken before the lock wait, so the balance read
+    // would still see the pre-lock snapshot and miss that concurrent spend — two overspending
+    // calls could both pass the balance check and both commit, with no serialization error to
+    // catch, because the locked account row itself is never updated. `rewards.createRedemption`
+    // below locks and reads the insider's points account the same way and shares this exact
+    // dependency. If this is ever run at a stricter isolation level, whoever wires the real
+    // connection pool must pin READ COMMITTED explicitly or add a serialization-failure retry
+    // wrapper around these transactions too.
     requests: {
       async sendRequest(input) {
         return db.transaction(async (tx) => {
@@ -681,6 +695,8 @@ export function createRealDatabase(db: NodePgDatabase): Database {
 
             // Lock the insider's points account, then re-check the key: a concurrent first call with the
             // same key may have committed while we waited, and that replay must not look like overspend.
+            // Isolation-level caveat: see the NOTE above `requests.sendRequest` (~line 403) — this
+            // lock-then-read-balance pattern is only correct under READ COMMITTED, for the same reason.
             const [account] = await tx
               .select()
               .from(ledgerAccounts)
