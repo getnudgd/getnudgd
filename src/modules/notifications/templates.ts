@@ -45,6 +45,28 @@ export const proofRejectedPayloadSchema = z.object({
 });
 export type ProofRejectedPayload = z.infer<typeof proofRejectedPayloadSchema>;
 
+export const rewardReleasedPayloadSchema = z.object({
+  requestId: z.string().min(1),
+  tranche: z.union([z.literal(1), z.literal(2)]),
+  points: z.number().int().positive(),
+  companyName: z.string().min(1),
+});
+export type RewardReleasedPayload = z.infer<typeof rewardReleasedPayloadSchema>;
+
+export const redemptionFulfilledPayloadSchema = z.object({
+  redemptionId: z.string().min(1),
+  brand: z.string().min(1),
+  points: z.number().int().positive(),
+});
+export type RedemptionFulfilledPayload = z.infer<typeof redemptionFulfilledPayloadSchema>;
+
+export const redemptionRejectedPayloadSchema = z.object({
+  redemptionId: z.string().min(1),
+  points: z.number().int().positive(),
+  reason: z.string().min(1),
+});
+export type RedemptionRejectedPayload = z.infer<typeof redemptionRejectedPayloadSchema>;
+
 export interface EmailContent {
   subject: string;
   html: string;
@@ -64,6 +86,9 @@ export const templateNames = [
   "request.expired",
   "proof.verified",
   "proof.rejected",
+  "reward.released",
+  "redemption.fulfilled",
+  "redemption.rejected",
 ] as const;
 export type TemplateName = (typeof templateNames)[number];
 
@@ -174,6 +199,65 @@ export const templates: Record<TemplateName, TemplateDefinition> = {
     whatsappParams(raw) {
       const payload = proofRejectedPayloadSchema.parse(raw);
       return { seekerName: payload.seekerName, reason: payload.reason };
+    },
+  },
+  "reward.released": {
+    payloadSchema: rewardReleasedPayloadSchema,
+    renderEmail(raw) {
+      const payload = rewardReleasedPayloadSchema.parse(raw);
+      return {
+        subject: "You earned Insider Rewards points",
+        html: `<p>Your vouch for a candidate at ${escapeHtml(payload.companyName)} earned you ${payload.points} points in Insider Rewards on ${brand.name} (tranche ${payload.tranche}).</p>`,
+      };
+    },
+    renderWhatsAppText(raw) {
+      const payload = rewardReleasedPayloadSchema.parse(raw);
+      return `You earned ${payload.points} points in Insider Rewards for your vouch at ${payload.companyName} on ${brand.name}.`;
+    },
+    whatsappTemplateName: "reward_released",
+    whatsappParams(raw) {
+      const payload = rewardReleasedPayloadSchema.parse(raw);
+      return { points: String(payload.points), companyName: payload.companyName };
+    },
+  },
+  "redemption.fulfilled": {
+    payloadSchema: redemptionFulfilledPayloadSchema,
+    renderEmail(raw) {
+      const payload = redemptionFulfilledPayloadSchema.parse(raw);
+      const giftCardBrand = payload.brand;
+      return {
+        subject: "Your gift card redemption is fulfilled",
+        html: `<p>Your redemption of ${payload.points} points for a ${escapeHtml(giftCardBrand)} gift card on ${brand.name} has been fulfilled.</p>`,
+      };
+    },
+    renderWhatsAppText(raw) {
+      const payload = redemptionFulfilledPayloadSchema.parse(raw);
+      const giftCardBrand = payload.brand;
+      return `Your redemption of ${payload.points} points for a ${giftCardBrand} gift card was fulfilled.`;
+    },
+    whatsappTemplateName: "redemption_fulfilled",
+    whatsappParams(raw) {
+      const payload = redemptionFulfilledPayloadSchema.parse(raw);
+      return { points: String(payload.points), brand: payload.brand };
+    },
+  },
+  "redemption.rejected": {
+    payloadSchema: redemptionRejectedPayloadSchema,
+    renderEmail(raw) {
+      const payload = redemptionRejectedPayloadSchema.parse(raw);
+      return {
+        subject: "Your gift card redemption was not approved",
+        html: `<p>Your redemption of ${payload.points} points on ${brand.name} was not approved: ${escapeHtml(payload.reason)}. The points are back in your wallet.</p>`,
+      };
+    },
+    renderWhatsAppText(raw) {
+      const payload = redemptionRejectedPayloadSchema.parse(raw);
+      return `Your redemption of ${payload.points} points was not approved: ${payload.reason}. The points are back in your wallet.`;
+    },
+    whatsappTemplateName: "redemption_rejected",
+    whatsappParams(raw) {
+      const payload = redemptionRejectedPayloadSchema.parse(raw);
+      return { points: String(payload.points), reason: payload.reason };
     },
   },
 };

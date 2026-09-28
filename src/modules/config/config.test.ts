@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
 import { getRules, getPacks, getRulesWithVersion, ConfigNotFoundError } from "./config";
+import { rulesSchema } from "./schemas";
 
 const RULES_V1 = {
   key: "rules",
@@ -46,6 +47,27 @@ describe("config.getRules", () => {
     const { db, seedConfig } = createFakeDatabase();
     seedConfig({ key: "rules", version: 1, placeholder: true, value: { nonsense: true } });
     await expect(getRules({ db })).rejects.toThrow();
+  });
+});
+
+describe("rulesSchema rewards fields", () => {
+  it("accepts rules with the rewards fields and rules without them", () => {
+    const withFields = {
+      ...RULES_V1.value,
+      pointsPerCredit: 40,
+      paisePerPoint: 100,
+      giftCardBrands: ["amazon", "flipkart"],
+    };
+    expect(rulesSchema.parse(withFields).pointsPerCredit).toBe(40);
+    const without = rulesSchema.parse(RULES_V1.value);
+    expect(without.pointsPerCredit).toBeUndefined();
+    expect(without.paisePerPoint).toBeUndefined();
+    expect(without.giftCardBrands).toBeUndefined();
+  });
+
+  it("rejects a zero pointsPerCredit and an empty giftCardBrands list", () => {
+    expect(() => rulesSchema.parse({ ...RULES_V1.value, pointsPerCredit: 0 })).toThrow();
+    expect(() => rulesSchema.parse({ ...RULES_V1.value, giftCardBrands: [] })).toThrow();
   });
 });
 

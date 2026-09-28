@@ -256,3 +256,48 @@ export const notifications = pgTable(
     userIdIdx: index("notifications_user_id_idx").on(table.userId),
   })
 );
+
+export const insiderRewards = pgTable(
+  "insider_rewards",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    requestId: uuid("request_id").notNull().references(() => insiderRequests.id),
+    insiderProfileId: uuid("insider_profile_id").notNull().references(() => insiderProfiles.id),
+    tranche: integer("tranche").notNull(),
+    points: integer("points").notNull(),
+    ledgerTxnId: uuid("ledger_txn_id").notNull().references(() => ledgerTxns.id),
+    releasedAt: timestamp("released_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    trancheCheck: check("insider_rewards_tranche_check", sql`${table.tranche} in (1, 2)`),
+    pointsCheck: check("insider_rewards_points_check", sql`${table.points} > 0`),
+    requestTrancheUq: uniqueIndex("insider_rewards_request_tranche_uq").on(table.requestId, table.tranche),
+    insiderIdx: index("insider_rewards_insider_profile_id_idx").on(table.insiderProfileId),
+  })
+);
+
+export const rewardRedemptions = pgTable(
+  "reward_redemptions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    insiderProfileId: uuid("insider_profile_id").notNull().references(() => insiderProfiles.id),
+    points: integer("points").notNull(),
+    brand: text("brand").notNull(),
+    denominationPaise: integer("denomination_paise").notNull(),
+    vendor: text("vendor").notNull(),
+    vendorRef: text("vendor_ref"),
+    status: text("status").notNull().default("pending"),
+    rejectReason: text("reject_reason"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => ({
+    statusCheck: check("reward_redemptions_status_check", sql`${table.status} in ('pending','fulfilled','rejected')`),
+    pointsCheck: check("reward_redemptions_points_check", sql`${table.points} > 0`),
+    denominationCheck: check("reward_redemptions_denomination_check", sql`${table.denominationPaise} > 0`),
+    idempotencyKeyUq: uniqueIndex("reward_redemptions_idempotency_key_uq").on(table.idempotencyKey),
+    statusCreatedIdx: index("reward_redemptions_status_created_idx").on(table.status, table.createdAt),
+    insiderCreatedIdx: index("reward_redemptions_insider_created_idx").on(table.insiderProfileId, table.createdAt),
+  })
+);

@@ -1,4 +1,4 @@
-import { eq, and, sum, isNull, isNotNull, gt, lt, asc, desc } from "drizzle-orm";
+import { eq, and, sum, isNull, isNotNull, gt, lt, asc, desc, type SQL } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
   ledgerAccounts,
@@ -17,6 +17,8 @@ import {
   verificationProofs,
   adminAuditLog,
   notifications,
+  insiderRewards,
+  rewardRedemptions,
 } from "../../../drizzle/schema";
 import type {
   Database,
@@ -35,8 +37,43 @@ import type {
   VerificationProofRecord,
   AdminAuditLogRecord,
   NotificationRecord,
+  InsiderRewardRecord,
+  PostLedgerEntryInput,
+  ReleaseTrancheInput,
+  RewardRedemptionRecord,
 } from "./types";
-import { LedgerImbalanceError, InsufficientBalanceError, RequestStateConflictError } from "./types";
+import {
+  LedgerImbalanceError,
+  InsufficientBalanceError,
+  RequestStateConflictError,
+  InsufficientPointsError,
+  RedemptionAlreadyResolvedError,
+  assertSingleCurrency,
+  assertValidTrancheInput,
+} from "./types";
+
+const REDEMPTION_IDEMPOTENCY_CONSTRAINT = "reward_redemptions_idempotency_key_uq";
+
+// Fixed ledger lock order: platform, seeker, insider, escrow (escrow always last).
+const OWNER_LOCK_ORDER: Record<LedgerOwnerType, number> = { platform: 0, seeker: 1, insider: 2, escrow: 3 };
+
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+// True when err (or a wrapped cause) is a Postgres unique violation on the redemption idempotency index.
+function isRedemptionIdempotencyViolation(err: unknown): boolean {
+  let current: unknown = err;
+  for (let depth = 0; depth < 5 && typeof current === "object" && current !== null; depth++) {
+    const e = current as { code?: unknown; constraint?: unknown; message?: unknown; cause?: unknown };
+    if (e.code === "23505") {
+      if (e.constraint === REDEMPTION_IDEMPOTENCY_CONSTRAINT) return true;
+      if (typeof e.message === "string" && e.message.includes(REDEMPTION_IDEMPOTENCY_CONSTRAINT)) return true;
+    }
+    current = e.cause;
+  }
+  return false;
+}
 
 function toLedgerAccountRecord(row: {
   id: string;
@@ -61,6 +98,71 @@ function assertZeroSum(entries: PostLedgerTxnInput["entries"]): void {
 }
 
 export function createRealDatabase(db: NodePgDatabase): Database {
+  type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+  // Posts a ledger transaction inside an open transaction: find-or-create each account
+  // (locking existing rows FOR UPDATE), insert the txn and its entries. Returns the txn id.
+  async function postEntriesInTx(
+    tx: Tx,
+    idempotencyKey: string,
+    eventType: string,
+    entries: PostLedgerEntryInput[]
+  ): Promise<string> {
+    assertZeroSum(entries);
+    assertSingleCurrency(entries);
+    // Lock accounts in a fixed order (platform, seeker, insider, escrow; ties by ownerId) so concurrent
+    // transactions can never deadlock on each other.
+    const ordered = [...entries].sort(
+      (a, b) => OWNER_LOCK_ORDER[a.ownerType] - OWNER_LOCK_ORDER[b.ownerType] || compareText(a.ownerId, b.ownerId)
+    );
+    const [txnRow] = await tx.insert(ledgerTxns).values({ idempotencyKey, eventType }).returning();
+    for (const entry of ordered) {
+      let [account] = await tx
+        .select()
+        .from(ledgerAccounts)
+        .where(
+          and(
+            eq(ledgerAccounts.ownerType, entry.ownerType),
+            eq(ledgerAccounts.ownerId, entry.ownerId),
+            eq(ledgerAccounts.currency, entry.currency)
+          )
+        )
+        .for("update");
+      if (!account) {
+        [account] = await tx
+          .insert(ledgerAccounts)
+          .values({ ownerType: entry.ownerType, ownerId: entry.ownerId, currency: entry.currency })
+          .returning();
+      }
+      await tx.insert(ledgerEntries).values({ txnId: txnRow.id, accountId: account.id, currency: entry.currency, amount: entry.amount });
+    }
+    return txnRow.id;
+  }
+
+  async function releaseTrancheInTx(tx: Tx, input: ReleaseTrancheInput): Promise<InsiderRewardRecord> {
+    assertValidTrancheInput(input);
+    const [existing] = await tx
+      .select()
+      .from(insiderRewards)
+      .where(and(eq(insiderRewards.requestId, input.requestId), eq(insiderRewards.tranche, input.tranche)));
+    if (existing) return existing as InsiderRewardRecord;
+    const ledgerTxnId = await postEntriesInTx(tx, `request:${input.requestId}:tranche:${input.tranche}`, "reward.tranche", [
+      { ownerType: "platform", ownerId: "platform", currency: "points", amount: -input.points },
+      { ownerType: "insider", ownerId: input.insiderProfileId, currency: "points", amount: input.points },
+    ]);
+    const [row] = await tx
+      .insert(insiderRewards)
+      .values({
+        requestId: input.requestId,
+        insiderProfileId: input.insiderProfileId,
+        tranche: input.tranche,
+        points: input.points,
+        ledgerTxnId,
+      })
+      .returning();
+    return row as InsiderRewardRecord;
+  }
+
   return {
     ledger: {
       async postTxn(input) {
@@ -305,6 +407,20 @@ export function createRealDatabase(db: NodePgDatabase): Database {
     // a raw Postgres serialization-failure error that this code does not catch or retry —
     // whoever wires the real connection pool must either pin READ COMMITTED or add a
     // serialization-failure retry wrapper around these transactions.
+    //
+    // sendRequest's overspend protection below (SELECT ... FOR UPDATE on the seeker's ledger
+    // account, then a separate SELECT summing ledgerEntries for the balance) has a sharper
+    // dependency on the same isolation level: under READ COMMITTED, the balance SELECT takes
+    // a fresh snapshot once the lock is acquired, so it correctly sees any concurrent spend
+    // that committed while this transaction waited on the lock. Under REPEATABLE READ, the
+    // whole transaction shares one snapshot taken before the lock wait, so the balance read
+    // would still see the pre-lock snapshot and miss that concurrent spend — two overspending
+    // calls could both pass the balance check and both commit, with no serialization error to
+    // catch, because the locked account row itself is never updated. `rewards.createRedemption`
+    // below locks and reads the insider's points account the same way and shares this exact
+    // dependency. If this is ever run at a stricter isolation level, whoever wires the real
+    // connection pool must pin READ COMMITTED explicitly or add a serialization-failure retry
+    // wrapper around these transactions too.
     requests: {
       async sendRequest(input) {
         return db.transaction(async (tx) => {
@@ -410,6 +526,15 @@ export function createRealDatabase(db: NodePgDatabase): Database {
           if (input.ledgerEntries.length > 0) {
             assertZeroSum(input.ledgerEntries);
           }
+          // The tranche must go to the insider this request is addressed to; check before any write.
+          if (input.trancheRelease && input.trancheRelease.points > 0) {
+            assertValidTrancheInput(input.trancheRelease);
+            if (input.trancheRelease.insiderProfileId !== current.insiderProfileId) {
+              throw new Error(
+                `Tranche release insider ${input.trancheRelease.insiderProfileId} does not match request ${input.requestId} insider ${current.insiderProfileId}`
+              );
+            }
+          }
 
           const [updated] = await tx
             .update(insiderRequests)
@@ -445,6 +570,10 @@ export function createRealDatabase(db: NodePgDatabase): Database {
                 .insert(ledgerEntries)
                 .values({ txnId: txnRow.id, accountId: account.id, currency: entry.currency, amount: entry.amount });
             }
+          }
+
+          if (input.trancheRelease && input.trancheRelease.points > 0) {
+            await releaseTrancheInTx(tx, { requestId: input.requestId, ...input.trancheRelease });
           }
 
           if (input.adminAudit) {
@@ -540,6 +669,181 @@ export function createRealDatabase(db: NodePgDatabase): Database {
           .from(adminAuditLog)
           .where(and(eq(adminAuditLog.targetType, targetType), eq(adminAuditLog.targetId, targetId)));
         return rows as AdminAuditLogRecord[];
+      },
+    },
+    rewards: {
+      async releaseTranche(input) {
+        return db.transaction((tx) => releaseTrancheInTx(tx, input));
+      },
+      async listRewards(insiderProfileId) {
+        const rows = await db
+          .select()
+          .from(insiderRewards)
+          .where(eq(insiderRewards.insiderProfileId, insiderProfileId))
+          .orderBy(desc(insiderRewards.releasedAt));
+        return rows as InsiderRewardRecord[];
+      },
+      async createRedemption(input) {
+        if (!Number.isInteger(input.points) || input.points <= 0) throw new Error("Redemption points must be a positive integer");
+        try {
+          return await db.transaction(async (tx) => {
+            const [existing] = await tx
+              .select()
+              .from(rewardRedemptions)
+              .where(eq(rewardRedemptions.idempotencyKey, input.idempotencyKey));
+            if (existing) return { redemption: existing as RewardRedemptionRecord, created: false };
+
+            // Lock the insider's points account, then re-check the key: a concurrent first call with the
+            // same key may have committed while we waited, and that replay must not look like overspend.
+            // Isolation-level caveat: see the NOTE above `requests.sendRequest` (~line 403) — this
+            // lock-then-read-balance pattern is only correct under READ COMMITTED, for the same reason.
+            const [account] = await tx
+              .select()
+              .from(ledgerAccounts)
+              .where(
+                and(
+                  eq(ledgerAccounts.ownerType, "insider"),
+                  eq(ledgerAccounts.ownerId, input.insiderProfileId),
+                  eq(ledgerAccounts.currency, "points")
+                )
+              )
+              .for("update");
+            const [existingAfterLock] = await tx
+              .select()
+              .from(rewardRedemptions)
+              .where(eq(rewardRedemptions.idempotencyKey, input.idempotencyKey));
+            if (existingAfterLock) return { redemption: existingAfterLock as RewardRedemptionRecord, created: false };
+
+            let balance = 0;
+            if (account) {
+              const [balanceRow] = await tx
+                .select({ total: sum(ledgerEntries.amount) })
+                .from(ledgerEntries)
+                .where(eq(ledgerEntries.accountId, account.id));
+              balance = Number(balanceRow?.total ?? 0);
+            }
+            if (balance < input.points) throw new InsufficientPointsError(input.insiderProfileId, input.points, balance);
+
+            const [row] = await tx
+              .insert(rewardRedemptions)
+              .values({
+                insiderProfileId: input.insiderProfileId,
+                points: input.points,
+                brand: input.brand,
+                denominationPaise: input.denominationPaise,
+                vendor: input.vendor,
+                status: "pending",
+                idempotencyKey: input.idempotencyKey,
+              })
+              .returning();
+            await postEntriesInTx(tx, `redemption:${row.id}:hold`, "reward.redemption.hold", [
+              { ownerType: "insider", ownerId: input.insiderProfileId, currency: "points", amount: -input.points },
+              { ownerType: "escrow", ownerId: row.id, currency: "points", amount: input.points },
+            ]);
+            return { redemption: row as RewardRedemptionRecord, created: true };
+          });
+        } catch (err) {
+          if (isRedemptionIdempotencyViolation(err)) {
+            const [existing] = await db
+              .select()
+              .from(rewardRedemptions)
+              .where(eq(rewardRedemptions.idempotencyKey, input.idempotencyKey));
+            if (existing) return { redemption: existing as RewardRedemptionRecord, created: false };
+          }
+          throw err;
+        }
+      },
+      async resolveRedemption(input) {
+        return db.transaction(async (tx) => {
+          // Lock order: the redemption row first, then ledger accounts (postEntriesInTx sorts them, escrow last).
+          const [redemption] = await tx
+            .select()
+            .from(rewardRedemptions)
+            .where(eq(rewardRedemptions.id, input.redemptionId))
+            .for("update");
+          if (!redemption) throw new Error(`Redemption ${input.redemptionId} not found`);
+          if (redemption.status === input.outcome) return redemption as RewardRedemptionRecord;
+          if (redemption.status !== "pending") {
+            throw new RedemptionAlreadyResolvedError(redemption.id, redemption.status as RewardRedemptionRecord["status"]);
+          }
+          const rejectReason = input.rejectReason?.trim();
+          if (input.outcome === "rejected" && !rejectReason) throw new Error("A reject reason is required");
+
+          if (input.outcome === "fulfilled") {
+            await postEntriesInTx(tx, `redemption:${redemption.id}:fulfil`, "reward.redemption.fulfil", [
+              { ownerType: "platform", ownerId: "platform", currency: "points", amount: redemption.points },
+              { ownerType: "escrow", ownerId: redemption.id, currency: "points", amount: -redemption.points },
+            ]);
+          } else {
+            await postEntriesInTx(tx, `redemption:${redemption.id}:reject`, "reward.redemption.reject", [
+              { ownerType: "insider", ownerId: redemption.insiderProfileId, currency: "points", amount: redemption.points },
+              { ownerType: "escrow", ownerId: redemption.id, currency: "points", amount: -redemption.points },
+            ]);
+          }
+
+          const [updated] = await tx
+            .update(rewardRedemptions)
+            .set({
+              status: input.outcome,
+              resolvedAt: new Date(),
+              ...(input.outcome === "fulfilled" && input.vendorRef !== undefined ? { vendorRef: input.vendorRef } : {}),
+              ...(input.outcome === "rejected" ? { rejectReason: rejectReason ?? null } : {}),
+            })
+            .where(eq(rewardRedemptions.id, redemption.id))
+            .returning();
+
+          if (input.adminAudit) {
+            await tx.insert(adminAuditLog).values({
+              adminUserId: input.adminAudit.adminUserId,
+              action: input.adminAudit.action,
+              targetType: input.adminAudit.targetType,
+              targetId: input.adminAudit.targetId,
+              detail: input.adminAudit.detail,
+            });
+          }
+          return updated as RewardRedemptionRecord;
+        });
+      },
+      async getRedemptionById(id) {
+        const [row] = await db.select().from(rewardRedemptions).where(eq(rewardRedemptions.id, id));
+        return (row as RewardRedemptionRecord) ?? null;
+      },
+      async listRedemptions(filter) {
+        const conditions: SQL[] = [];
+        if (filter?.status) conditions.push(eq(rewardRedemptions.status, filter.status));
+        if (filter?.insiderProfileId) conditions.push(eq(rewardRedemptions.insiderProfileId, filter.insiderProfileId));
+        const rows = await db
+          .select()
+          .from(rewardRedemptions)
+          .where(conditions.length > 0 ? and(...conditions) : undefined)
+          .orderBy(desc(rewardRedemptions.createdAt));
+        return rows as RewardRedemptionRecord[];
+      },
+      async getWallet(insiderProfileId) {
+        const [balanceRow] = await db
+          .select({ total: sum(ledgerEntries.amount) })
+          .from(ledgerEntries)
+          .innerJoin(ledgerAccounts, eq(ledgerEntries.accountId, ledgerAccounts.id))
+          .where(
+            and(
+              eq(ledgerAccounts.ownerType, "insider"),
+              eq(ledgerAccounts.ownerId, insiderProfileId),
+              eq(ledgerAccounts.currency, "points")
+            )
+          );
+        const [earnedRow] = await db
+          .select({ total: sum(insiderRewards.points) })
+          .from(insiderRewards)
+          .where(eq(insiderRewards.insiderProfileId, insiderProfileId));
+        const [pendingRow] = await db
+          .select({ total: sum(rewardRedemptions.points) })
+          .from(rewardRedemptions)
+          .where(and(eq(rewardRedemptions.insiderProfileId, insiderProfileId), eq(rewardRedemptions.status, "pending")));
+        return {
+          balance: Number(balanceRow?.total ?? 0),
+          lifetimeEarned: Number(earnedRow?.total ?? 0),
+          pendingRedemptionPoints: Number(pendingRow?.total ?? 0),
+        };
       },
     },
     notifications: {

@@ -12,6 +12,9 @@ export const rulesSchema = z.object({
   panThresholdPoints: z.number().int().nonnegative(),
   freeCreditGrant: z.number().int().nonnegative(),
   requestCostByTier: z.record(z.string(), z.number().int().positive()),
+  pointsPerCredit: z.number().int().positive().optional(),
+  paisePerPoint: z.number().int().positive().optional(),
+  giftCardBrands: z.array(z.string().min(1)).min(1).optional(),
 });
 export type Rules = z.infer<typeof rulesSchema>;
 
