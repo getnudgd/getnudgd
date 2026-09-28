@@ -14,6 +14,9 @@ const workCalls = vi.hoisted(
 // pre-seed this map directly (bypassing createQueue) to simulate a queue that pre-existed
 // under a different policy before this fix, the way this repo's own dev database did.
 const storedQueuePolicies = vi.hoisted(() => new Map<string, string>());
+// Lets a test force getQueue() to reject, simulating a transient connection blip during the
+// policy-drift diagnostic check.
+const getQueueShouldThrow = vi.hoisted(() => ({ value: false }));
 
 vi.mock("pg-boss", () => {
   class PgBoss {
@@ -26,6 +29,7 @@ vi.mock("pg-boss", () => {
       }
     }
     async getQueue(queueName: string) {
+      if (getQueueShouldThrow.value) throw new Error("connection reset");
       if (!storedQueuePolicies.has(queueName)) return null;
       return { name: queueName, policy: storedQueuePolicies.get(queueName) };
     }
@@ -123,6 +127,7 @@ describe("createRealQueueClient work()", () => {
     createQueueCalls.length = 0;
     workCalls.length = 0;
     storedQueuePolicies.clear();
+    getQueueShouldThrow.value = false;
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -191,5 +196,18 @@ describe("createRealQueueClient work()", () => {
     expect(message).toContain("notify.send");
     expect(message).toContain("standard");
     expect(message).toContain("singleton");
+  });
+
+  it("logs a console.error and does not throw when boss.getQueue() itself fails", async () => {
+    getQueueShouldThrow.value = true;
+    const client = createRealQueueClient("postgres://unused");
+    await client.start();
+
+    await expect(client.work("notify.send", async () => {}, { policy: "singleton" })).resolves.toBeUndefined();
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const message = errorSpy.mock.calls[0].join(" ");
+    expect(message).toContain("notify.send");
+    expect(message).toContain("could not verify policy");
   });
 });

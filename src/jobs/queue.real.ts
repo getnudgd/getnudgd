@@ -44,16 +44,22 @@ export function createRealQueueClient(connectionString: string): QueueClient {
       // deliverNotification's own status === "sent" guard) still hold even with the wrong
       // policy, so this is a loud warning, not a hard failure; it must never crash the worker.
       if (options?.policy !== undefined) {
-        const actual = await boss.getQueue(queueName);
-        const actualPolicy = actual?.policy ?? "standard";
-        if (actualPolicy !== options.policy) {
-          console.error(
-            `[queue] "${queueName}" is registered with policy "${actualPolicy}" but this work() call ` +
-              `requested policy "${options.policy}" — createQueue() cannot change an existing queue's ` +
-              `policy (it is ON CONFLICT DO NOTHING, and pg-boss's updateQueue() refuses policy changes). ` +
-              `Delete and recreate the queue (e.g. boss.deleteQueue("${queueName}") while idle, or the ` +
-              `equivalent SQL fixup) to actually apply "${options.policy}".`
-          );
+        try {
+          const actual = await boss.getQueue(queueName);
+          const actualPolicy = actual?.policy ?? "standard";
+          if (actualPolicy !== options.policy) {
+            console.error(
+              `[queue] "${queueName}" is registered with policy "${actualPolicy}" but this work() call ` +
+                `requested policy "${options.policy}" — createQueue() cannot change an existing queue's ` +
+                `policy (it is ON CONFLICT DO NOTHING, and pg-boss's updateQueue() refuses policy changes). ` +
+                `Delete and recreate the queue (e.g. boss.deleteQueue("${queueName}") while idle, or the ` +
+                `equivalent SQL fixup) to actually apply "${options.policy}".`
+            );
+          }
+        } catch (err) {
+          // A failure to verify (e.g. a transient connection blip) should log and move on, not
+          // throw out of work() — this check is a diagnostic, not a correctness gate.
+          console.error(`[queue] could not verify policy for "${queueName}"`, err);
         }
       }
 

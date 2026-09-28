@@ -76,16 +76,23 @@ describe.skipIf(!live)("notify.send queue singleton policy (real Postgres + real
       await client2.stop();
     });
 
-    it("never runs two jobs with the same singletonKey at once, and both still complete", async () => {
-      const singletonKey = `singleton-test:${tag}`;
-      await client1.send(queueName, {}, { singletonKey, policy: "singleton" });
-      await client2.send(queueName, {}, { singletonKey, policy: "singleton" });
+    it(
+      "never runs two jobs with the same singletonKey at once, and both still complete",
+      async () => {
+        const singletonKey = `singleton-test:${tag}`;
+        await client1.send(queueName, {}, { singletonKey, policy: "singleton" });
+        await client2.send(queueName, {}, { singletonKey, policy: "singleton" });
 
-      await waitUntil(() => completed >= 2, 10_000);
+        await waitUntil(() => completed >= 2, 10_000);
 
-      expect(completed).toBe(2);
-      expect(maxActive).toBe(1);
-    });
+        expect(completed).toBe(2);
+        expect(maxActive).toBe(1);
+      },
+      // Vitest's default per-test timeout is 5000ms. Two 1500ms handler sleeps run serialized
+      // under the singleton policy here (job2 only starts once job1 finishes), plus polling
+      // delay and DB round-trips, so the default margin isn't enough — pass an explicit budget.
+      20_000
+    );
   });
 
   // Companion regression-test-for-the-test: proves the methodology above actually detects
@@ -128,16 +135,21 @@ describe.skipIf(!live)("notify.send queue singleton policy (real Postgres + real
       await client2.stop();
     });
 
-    it("observes both jobs active at once under standard policy", async () => {
-      const singletonKey = `standard-test:${tag}`;
-      await client1.send(queueName, {}, { singletonKey });
-      await client2.send(queueName, {}, { singletonKey });
+    it(
+      "observes both jobs active at once under standard policy",
+      async () => {
+        const singletonKey = `standard-test:${tag}`;
+        await client1.send(queueName, {}, { singletonKey });
+        await client2.send(queueName, {}, { singletonKey });
 
-      await waitUntil(() => completed >= 2, 10_000);
+        await waitUntil(() => completed >= 2, 10_000);
 
-      expect(completed).toBe(2);
-      expect(maxActive).toBe(2);
-    });
+        expect(completed).toBe(2);
+        expect(maxActive).toBe(2);
+      },
+      // See the timeout comment on the singleton-policy test above — same margin needed here.
+      20_000
+    );
   });
 
   // The actual regression test for the real bug class this task closes: two independent worker
@@ -198,78 +210,85 @@ describe.skipIf(!live)("notify.send queue singleton policy (real Postgres + real
       await pool.end();
     });
 
-    it("delivers a notification exactly once even when two independent worker registrations race on the same id", async () => {
-      const user = await dbClient1.identity.findOrCreateUser(`fb-sp-${tag}`, `sp-${tag}@x.com`, "seeker");
+    it(
+      "delivers a notification exactly once even when two independent worker registrations race on the same id",
+      async () => {
+        const user = await dbClient1.identity.findOrCreateUser(`fb-sp-${tag}`, `sp-${tag}@x.com`, "seeker");
 
-      const { sender: email1, sent: sent1 } = createFakeEmailSender();
-      const { gateway: whatsapp1 } = createFakeWhatsAppGateway();
-      const { sender: email2, sent: sent2 } = createFakeEmailSender();
-      const { gateway: whatsapp2 } = createFakeWhatsAppGateway();
-      const deliveryDeps1: DeliveryDeps = { db: dbClient1, email: email1, whatsapp: whatsapp1 };
-      const deliveryDeps2: DeliveryDeps = { db: dbClient2, email: email2, whatsapp: whatsapp2 };
+        const { sender: email1, sent: sent1 } = createFakeEmailSender();
+        const { gateway: whatsapp1 } = createFakeWhatsAppGateway();
+        const { sender: email2, sent: sent2 } = createFakeEmailSender();
+        const { gateway: whatsapp2 } = createFakeWhatsAppGateway();
+        const deliveryDeps1: DeliveryDeps = { db: dbClient1, email: email1, whatsapp: whatsapp1 };
+        const deliveryDeps2: DeliveryDeps = { db: dbClient2, email: email2, whatsapp: whatsapp2 };
 
-      let inFlight = 0;
-      let maxInFlight = 0;
-      let handledCount = 0;
-      const wrapHandler = (deps: DeliveryDeps) => async (payload: unknown) => {
-        inFlight++;
-        maxInFlight = Math.max(maxInFlight, inFlight);
-        try {
-          const { notificationId } = payload as { notificationId: string };
-          // Artificial delay simulates a slow vendor call, and — same reasoning as FAST_POLL/
-          // HANDLER_SLEEP_MS above — is long enough relative to the 0.5s poll interval that the
-          // second (duplicate) job is essentially guaranteed to have its own fetch attempted
-          // while this one is still active, actually exercising the singleton enforcement
-          // rather than just getting lucky on ordering.
-          await new Promise((r) => setTimeout(r, HANDLER_SLEEP_MS));
-          await deliverNotification(deps, notificationId);
-          handledCount++;
-        } finally {
-          inFlight--;
-        }
-      };
+        let inFlight = 0;
+        let maxInFlight = 0;
+        let handledCount = 0;
+        const wrapHandler = (deps: DeliveryDeps) => async (payload: unknown) => {
+          inFlight++;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          try {
+            const { notificationId } = payload as { notificationId: string };
+            // Artificial delay simulates a slow vendor call, and — same reasoning as FAST_POLL/
+            // HANDLER_SLEEP_MS above — is long enough relative to the 0.5s poll interval that
+            // the second (duplicate) job is essentially guaranteed to have its own fetch
+            // attempted while this one is still active, actually exercising the singleton
+            // enforcement rather than just getting lucky on ordering.
+            await new Promise((r) => setTimeout(r, HANDLER_SLEEP_MS));
+            await deliverNotification(deps, notificationId);
+            handledCount++;
+          } finally {
+            inFlight--;
+          }
+        };
 
-      // Registers notify.send under "singleton" policy — this call is what actually
-      // (re)creates the queue after the beforeAll fixup deleted its old "standard"
-      // registration.
-      await queueClient1.work("notify.send", wrapHandler(deliveryDeps1), { policy: "singleton", ...FAST_POLL });
-      await queueClient2.work("notify.send", wrapHandler(deliveryDeps2), { policy: "singleton", ...FAST_POLL });
+        // Registers notify.send under "singleton" policy — this call is what actually
+        // (re)creates the queue after the beforeAll fixup deleted its old "standard"
+        // registration.
+        await queueClient1.work("notify.send", wrapHandler(deliveryDeps1), { policy: "singleton", ...FAST_POLL });
+        await queueClient2.work("notify.send", wrapHandler(deliveryDeps2), { policy: "singleton", ...FAST_POLL });
 
-      await notify(
-        { db: dbClient1, queue: queueClient1 },
-        user.id,
-        "request.accepted",
-        { requestId: `r-${tag}`, companyName: "Acme" },
-        `evt:singleton:${tag}`
-      );
+        await notify(
+          { db: dbClient1, queue: queueClient1 },
+          user.id,
+          "request.accepted",
+          { requestId: `r-${tag}`, companyName: "Acme" },
+          `evt:singleton:${tag}`
+        );
 
-      // A second, independent enqueue attempt with the identical singletonKey
-      // (as sweepPendingNotifications would do if it raced the first delivery).
-      const records = await pool.query<{ id: string }>(
-        "select id from notifications where idempotency_key = $1",
-        [`evt:singleton:${tag}:request.accepted:${user.id}`]
-      );
-      const notificationId = records.rows[0]?.id;
-      expect(notificationId).toBeTruthy();
-      await queueClient2.send(
-        "notify.send",
-        { notificationId },
-        { singletonKey: `notify:${notificationId}`, policy: "singleton" }
-      );
+        // A second, independent enqueue attempt with the identical singletonKey
+        // (as sweepPendingNotifications would do if it raced the first delivery).
+        const records = await pool.query<{ id: string }>(
+          "select id from notifications where idempotency_key = $1",
+          [`evt:singleton:${tag}:request.accepted:${user.id}`]
+        );
+        const notificationId = records.rows[0]?.id;
+        expect(notificationId).toBeTruthy();
+        await queueClient2.send(
+          "notify.send",
+          { notificationId },
+          { singletonKey: `notify:${notificationId}`, policy: "singleton" }
+        );
 
-      // Don't assert until BOTH the original and the duplicate job have actually run — the
-      // duplicate is serialized behind the first, not dropped, so it should complete too (its
-      // deliverNotification call is just a no-op thanks to the status === "sent" guard).
-      // Asserting after only the first `handledCount >= 1` could pass before the serialized
-      // duplicate had even started.
-      await waitUntil(() => handledCount >= 2, 10_000);
+        // Don't assert until BOTH the original and the duplicate job have actually run — the
+        // duplicate is serialized behind the first, not dropped, so it should complete too (its
+        // deliverNotification call is just a no-op thanks to the status === "sent" guard).
+        // Asserting after only the first `handledCount >= 1` could pass before the serialized
+        // duplicate had even started.
+        await waitUntil(() => handledCount >= 2, 10_000);
 
-      expect(handledCount).toBe(2);
-      expect(maxInFlight).toBe(1);
-      expect(sent1.length + sent2.length).toBe(1);
+        expect(handledCount).toBe(2);
+        expect(maxInFlight).toBe(1);
+        expect(sent1.length + sent2.length).toBe(1);
 
-      const finalRow = await dbClient1.notifications.getById(notificationId as string);
-      expect(finalRow?.status).toBe("sent");
-    });
+        const finalRow = await dbClient1.notifications.getById(notificationId as string);
+        expect(finalRow?.status).toBe("sent");
+      },
+      // Two serialized 1500ms handler sleeps (original, then the duplicate once the first
+      // frees the singleton slot) plus polling delay and several DB round-trips comfortably
+      // exceed Vitest's default 5000ms per-test timeout.
+      20_000
+    );
   });
 });
