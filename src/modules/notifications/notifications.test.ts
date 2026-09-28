@@ -19,7 +19,7 @@ describe("notify", () => {
     const sentJobs: Array<{
       queueName: string;
       payload: { notificationId: string };
-      options?: { singletonKey?: string; retryLimit?: number; retryBackoff?: boolean };
+      options?: { singletonKey?: string; retryLimit?: number; retryBackoff?: boolean; policy?: string };
     }> = [];
     const spyQueue: QueueClient = {
       async start() {},
@@ -40,6 +40,7 @@ describe("notify", () => {
     expect(sentJobs[0].options?.singletonKey).toBe(`notify:${notificationId}`);
     expect(sentJobs[0].options?.retryLimit).toBe(3);
     expect(sentJobs[0].options?.retryBackoff).toBe(true);
+    expect(sentJobs[0].options?.policy).toBe("singleton");
 
     const record = await db.notifications.getById(notificationId);
     expect(record?.status).toBe("pending");
@@ -339,7 +340,7 @@ describe("deliverNotification", () => {
 
 describe("sweepPendingNotifications", () => {
   function makeSpyQueue(failFor?: (notificationId: string) => boolean) {
-    const sent: Array<{ notificationId: string; options?: { singletonKey?: string; retryLimit?: number; retryBackoff?: boolean } }> = [];
+    const sent: Array<{ notificationId: string; options?: { singletonKey?: string; retryLimit?: number; retryBackoff?: boolean; policy?: string } }> = [];
     const queue: QueueClient = {
       async start() {},
       async stop() {},
@@ -369,6 +370,7 @@ describe("sweepPendingNotifications", () => {
     expect(sent[0].options?.singletonKey).toBe(`notify:${record.id}`);
     expect(sent[0].options?.retryLimit).toBe(3);
     expect(sent[0].options?.retryBackoff).toBe(true);
+    expect(sent[0].options?.policy).toBe("singleton");
   });
 
   it("does not touch a pending row younger than the sweep age", async () => {

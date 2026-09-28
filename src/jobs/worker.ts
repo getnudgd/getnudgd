@@ -37,10 +37,18 @@ export async function startWorker(deps: WorkerDeps): Promise<void> {
   });
   await deps.queue.schedule("requests.sweep", "0 * * * *", {});
 
-  await deps.queue.work("notify.send", async (payload) => {
-    const { notificationId } = notifySendPayloadSchema.parse(payload);
-    await deliverNotification(deliveryDeps, notificationId);
-  });
+  // policy: "singleton" pairs with the singletonKey `notify:{id}` set in
+  // notifications.ts's enqueueDelivery — whichever process (web sending vs. worker
+  // registering here) creates this queue first determines its policy, since
+  // pg-boss's createQueue is ON CONFLICT DO NOTHING and cannot be changed later.
+  await deps.queue.work(
+    "notify.send",
+    async (payload) => {
+      const { notificationId } = notifySendPayloadSchema.parse(payload);
+      await deliverNotification(deliveryDeps, notificationId);
+    },
+    { policy: "singleton" }
+  );
 
   await deps.queue.work("notifications.sweep", async () => {
     await sweepPendingNotifications({ db: deps.db, queue: deps.queue }, new Date());
