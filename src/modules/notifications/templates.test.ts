@@ -2,9 +2,18 @@ import { describe, it, expect } from "vitest";
 import { templates, templateNames } from "./templates";
 
 describe("templates", () => {
-  it("has exactly the 5 expected template names", () => {
+  it("has exactly the 8 expected template names", () => {
     expect([...templateNames].sort()).toEqual(
-      ["proof.rejected", "proof.verified", "request.accepted", "request.declined", "request.expired"].sort()
+      [
+        "proof.rejected",
+        "proof.verified",
+        "redemption.fulfilled",
+        "redemption.rejected",
+        "request.accepted",
+        "request.declined",
+        "request.expired",
+        "reward.released",
+      ].sort()
     );
   });
 
@@ -155,5 +164,125 @@ describe("templates", () => {
     expect(params.seekerName).toContain("<script>");
     expect(params.reason).toContain("alert");
     expect(params.reason).not.toContain("&lt;");
+  });
+
+  it("reward.released renders points, tranche, and companyName into email and WhatsApp text, and rejects an invalid payload", () => {
+    const definition = templates["reward.released"];
+    const payload = { requestId: "r1", tranche: 1 as const, points: 100, companyName: "Acme" };
+    const email = definition.renderEmail(payload);
+    expect(email.subject.length).toBeGreaterThan(0);
+    expect(email.html).toContain("100");
+    expect(email.html).toContain("Acme");
+    const whatsappText = definition.renderWhatsAppText(payload);
+    expect(whatsappText).toContain("100");
+    expect(whatsappText).toContain("Acme");
+    expect(definition.whatsappTemplateName).toBe("reward_released");
+    expect(definition.whatsappParams(payload)).toEqual({ points: "100", companyName: "Acme" });
+    expect(() => definition.payloadSchema.parse({ ...payload, tranche: 3 })).toThrow();
+    expect(() => definition.payloadSchema.parse({ requestId: "r1", tranche: 1, companyName: "Acme" })).toThrow();
+  });
+
+  it("redemption.fulfilled renders points and brand into email and WhatsApp text, and rejects an invalid payload", () => {
+    const definition = templates["redemption.fulfilled"];
+    const payload = { redemptionId: "red1", brand: "Amazon", points: 500 };
+    const email = definition.renderEmail(payload);
+    expect(email.subject.length).toBeGreaterThan(0);
+    expect(email.html).toContain("500");
+    expect(email.html).toContain("Amazon");
+    const whatsappText = definition.renderWhatsAppText(payload);
+    expect(whatsappText).toContain("500");
+    expect(whatsappText).toContain("Amazon");
+    expect(definition.whatsappTemplateName).toBe("redemption_fulfilled");
+    expect(definition.whatsappParams(payload)).toEqual({ points: "500", brand: "Amazon" });
+    expect(() => definition.payloadSchema.parse({ redemptionId: "red1", points: 500 })).toThrow();
+  });
+
+  it("redemption.rejected renders points and reason into email and WhatsApp text, and rejects an invalid payload", () => {
+    const definition = templates["redemption.rejected"];
+    const payload = { redemptionId: "red1", points: 500, reason: "PAN details did not match" };
+    const email = definition.renderEmail(payload);
+    expect(email.subject.length).toBeGreaterThan(0);
+    expect(email.html).toContain("500");
+    expect(email.html).toContain("PAN details did not match");
+    const whatsappText = definition.renderWhatsAppText(payload);
+    expect(whatsappText).toContain("500");
+    expect(whatsappText).toContain("PAN details did not match");
+    expect(definition.whatsappTemplateName).toBe("redemption_rejected");
+    expect(definition.whatsappParams(payload)).toEqual({ points: "500", reason: "PAN details did not match" });
+    expect(() => definition.payloadSchema.parse({ redemptionId: "red1", points: 500 })).toThrow();
+  });
+
+  it("escapes HTML special characters in the new templates' email bodies but not in WhatsApp text, and keeps subjects plain", () => {
+    const evil = '<b>&"\'</b>';
+
+    const rewardEmail = templates["reward.released"].renderEmail({
+      requestId: "r1",
+      tranche: 1 as const,
+      points: 100,
+      companyName: evil,
+    });
+    expect(rewardEmail.html).not.toContain("<b>");
+    expect(rewardEmail.html).toContain("&lt;b&gt;");
+    expect(rewardEmail.subject).not.toMatch(/&(amp|lt|gt|quot|#39);/);
+    const rewardWhatsApp = templates["reward.released"].renderWhatsAppText({
+      requestId: "r1",
+      tranche: 1 as const,
+      points: 100,
+      companyName: evil,
+    });
+    expect(rewardWhatsApp).toContain(evil);
+
+    const fulfilledEmail = templates["redemption.fulfilled"].renderEmail({
+      redemptionId: "red1",
+      brand: evil,
+      points: 500,
+    });
+    expect(fulfilledEmail.html).not.toContain("<b>");
+    expect(fulfilledEmail.html).toContain("&lt;b&gt;");
+    expect(fulfilledEmail.subject).not.toMatch(/&(amp|lt|gt|quot|#39);/);
+    const fulfilledWhatsApp = templates["redemption.fulfilled"].renderWhatsAppText({
+      redemptionId: "red1",
+      brand: evil,
+      points: 500,
+    });
+    expect(fulfilledWhatsApp).toContain(evil);
+
+    const rejectedEmail = templates["redemption.rejected"].renderEmail({
+      redemptionId: "red1",
+      points: 500,
+      reason: evil,
+    });
+    expect(rejectedEmail.html).not.toContain("<b>");
+    expect(rejectedEmail.html).toContain("&lt;b&gt;");
+    expect(rejectedEmail.subject).not.toMatch(/&(amp|lt|gt|quot|#39);/);
+    const rejectedWhatsApp = templates["redemption.rejected"].renderWhatsAppText({
+      redemptionId: "red1",
+      points: 500,
+      reason: evil,
+    });
+    expect(rejectedWhatsApp).toContain(evil);
+  });
+
+  it("never uses banned vocabulary in the three new templates, and reward.released mentions Insider Rewards", () => {
+    const banned = /refer|payout/i;
+    const rewardPayload = { requestId: "r1", tranche: 1 as const, points: 100, companyName: "Acme" };
+    const fulfilledPayload = { redemptionId: "red1", brand: "Amazon", points: 500 };
+    const rejectedPayload = { redemptionId: "red1", points: 500, reason: "PAN details did not match" };
+
+    for (const [name, payload] of [
+      ["reward.released", rewardPayload],
+      ["redemption.fulfilled", fulfilledPayload],
+      ["redemption.rejected", rejectedPayload],
+    ] as const) {
+      const definition = templates[name];
+      const email = definition.renderEmail(payload);
+      const whatsappText = definition.renderWhatsAppText(payload);
+      expect(email.subject).not.toMatch(banned);
+      expect(email.html).not.toMatch(banned);
+      expect(whatsappText).not.toMatch(banned);
+    }
+
+    const rewardEmail = templates["reward.released"].renderEmail(rewardPayload);
+    expect(rewardEmail.html).toContain("Insider Rewards");
   });
 });

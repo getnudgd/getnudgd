@@ -15,6 +15,8 @@ import type { EmailSender } from "../adapters/email/types";
 import { createFakeEmailSender } from "../adapters/email/fake";
 import type { WhatsAppGateway } from "../adapters/whatsapp/types";
 import { createFakeWhatsAppGateway } from "../adapters/whatsapp/fake";
+import type { GiftCardVendor } from "../adapters/giftcards/types";
+import { createManualFulfilmentVendor } from "../adapters/giftcards/manual";
 
 export interface Adapters {
   db: Database;
@@ -23,6 +25,7 @@ export interface Adapters {
   storage: StorageAdapter;
   email: EmailSender;
   whatsapp: WhatsAppGateway;
+  giftCards: GiftCardVendor;
 }
 
 let cached: Adapters | undefined;
@@ -32,8 +35,11 @@ let cached: Adapters | undefined;
  * auth/storage/email/whatsapp have no real.ts implementation yet (Firebase, Cloud Storage,
  * and Brevo are deferred; WhatsAppGateway has only a fake in this plan) — they
  * always use fakes until those land, regardless
- * of ADAPTERS. Memoized: the underlying Pool/QueueClient are constructed once
- * and reused across calls within this process.
+ * of ADAPTERS. giftCards always uses the manual fulfilment vendor (the founder
+ * fulfils redemptions by hand from `/admin`); there is no fake/real split for
+ * it yet since there is no third-party gift-card vendor integrated. Memoized:
+ * the underlying Pool/QueueClient are constructed once and reused across calls
+ * within this process.
  *
  * This file intentionally does NOT import "server-only": it is imported directly
  * by the pg-boss worker process (src/jobs/run-worker.ts), which runs under plain
@@ -60,8 +66,9 @@ export function getAdapters(): Adapters {
   const email: EmailSender = createFakeEmailSender().sender;
 
   const whatsapp: WhatsAppGateway = createFakeWhatsAppGateway().gateway;
+  const giftCards: GiftCardVendor = createManualFulfilmentVendor();
 
-  cached = { db, queue, auth, storage, email, whatsapp };
+  cached = { db, queue, auth, storage, email, whatsapp, giftCards };
   return cached;
 }
 
