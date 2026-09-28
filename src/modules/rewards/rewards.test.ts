@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
 import { InsufficientPointsError, type Database } from "../../adapters/db/types";
 import { createFakeQueueClient } from "../../jobs/queue.fake";
@@ -108,6 +108,13 @@ async function grantPoints(db: Database, insiderProfileId: string, amount: numbe
 function makeDeps(db: Database, giftCards = createFakeGiftCardVendor().vendor): RewardsDeps {
   return { db, queue: createFakeQueueClient(), giftCards };
 }
+
+// Backstop for every vi.spyOn in this file (console.error mocks, db method spies): guarantees
+// restoration even if an assertion throws before a test's own explicit mockRestore() runs, so a
+// failing test can never leak a mocked console.error or spied db method into the next test.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("releaseTranche", () => {
   it("computes points using the request's stamped rules version, not the latest", async () => {
@@ -296,25 +303,49 @@ describe("requestRedemption", () => {
     consoleError.mockRestore();
   });
 
-  it("a vendor issued result fulfils the redemption, stamps vendorRef, and notifies exactly once", async () => {
+  it("a vendor issued result fulfils the redemption, moves escrow to platform, stamps vendorRef, and notifies exactly once", async () => {
     const { db, insiderProfileId } = await setup();
     await grantPoints(db, insiderProfileId, 600);
     const fakeVendor = createFakeGiftCardVendor();
     fakeVendor.setResult({ status: "issued", vendorRef: "gc-123" });
     const deps = makeDeps(db, fakeVendor.vendor);
     const { queue, notificationIds } = recordNotifySends(deps.queue);
+    // Spies prove requestRedemption itself drove these calls exactly once — not that their
+    // downstream side effects (a queued job, an escrow balance) merely happen to look right.
+    const resolveSpy = vi.spyOn(db.rewards, "resolveRedemption");
+    const insiderLookupSpy = vi.spyOn(db.identity, "getInsiderProfileById");
+    const platformBefore = await db.ledger.getBalance("platform", "platform", "points");
 
     const redemption = await requestRedemption({ ...deps, queue }, { idempotencyKey: "r8", insiderProfileId, points: 500, brand: "amazon" });
 
+    // Assertions on the value requestRedemption itself returned (not a re-fetched row). The fake
+    // db mutates redemption rows in place, so status/vendorRef alone would read "fulfilled" even
+    // if the implementation returned the pre-resolve object without ever resolving it; resolvedAt
+    // and the resolveRedemption call count only become true once resolveRedemption actually ran.
     expect(redemption.status).toBe("fulfilled");
     expect(redemption.vendorRef).toBe("gc-123");
+    expect(redemption.resolvedAt).not.toBeNull();
+    expect(resolveSpy).toHaveBeenCalledTimes(1);
+
+    // Escrow moved to platform (brief Step 1: "escrow moved to platform").
+    expect(await db.ledger.getBalance("escrow", redemption.id, "points")).toBe(0);
+    const platformAfter = await db.ledger.getBalance("platform", "platform", "points");
+    expect(platformAfter - platformBefore).toBe(500);
+    const wallet = await db.rewards.getWallet(insiderProfileId);
+    expect(wallet.pendingRedemptionPoints).toBe(0);
+
     expect(notificationIds).toHaveLength(1);
     const notification = await db.notifications.getById(notificationIds[0]);
     expect(notification?.template).toBe("redemption.fulfilled");
+    expect(insiderLookupSpy).toHaveBeenCalledTimes(1);
 
     const replay = await requestRedemption({ ...deps, queue }, { idempotencyKey: "r8", insiderProfileId, points: 500, brand: "amazon" });
     expect(replay.status).toBe("fulfilled");
     expect(fakeVendor.issued).toHaveLength(1);
+    expect(resolveSpy).toHaveBeenCalledTimes(1);
+    // Proves notifyInsiderOrLog itself was not invoked again on replay — not just that no second
+    // job ended up queued, which notify()'s own eventKey dedupe would mask either way.
+    expect(insiderLookupSpy).toHaveBeenCalledTimes(1);
     expect(notificationIds).toHaveLength(1);
   });
 
