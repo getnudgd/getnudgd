@@ -3,6 +3,11 @@
 // RUN_VENDOR_TESTS=1 — this is concurrency, fakes cannot prove it.
 // Run: export $(grep -v '^#' .env.local | grep -v '^$' | xargs -d '\n');
 //      RUN_VENDOR_TESTS=1 npx vitest run src/jobs/queue.singleton-policy.live.test.ts
+//
+// Do not run this alongside a live `npm run worker:dev` (or any other process) against the
+// same DATABASE_URL: a concurrently running worker also polls the real `notify.send` queue
+// this file uses in its third describe block, and could fetch/complete one of this test's
+// jobs itself, making the assertions here flaky or simply wrong.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -14,6 +19,17 @@ import { notify, deliverNotification, type DeliveryDeps } from "../modules/notif
 import type { QueueClient } from "./queue";
 
 const live = process.env.RUN_VENDOR_TESTS === "1";
+
+// pg-boss's default idle poll interval is 2000ms (attorney.js's applyPollingInterval, when
+// pollingIntervalSeconds is unset). Forcing it down to the protocol minimum (500ms, see
+// MIN_POLLING_INTERVAL_MS in attorney.js) for these test clients means a client's next fetch
+// attempt is never more than ~0.5s away, and the handler sleep below (1500ms) is comfortably
+// longer than that — so a second, polling client is essentially guaranteed to attempt (and,
+// under "standard" policy, succeed at) a fetch while the first job is still active. Without
+// this, a handler sleep shorter than the *default* 2000ms poll gap could let both jobs finish
+// without ever colliding, and every assertion below would pass without proving anything.
+const FAST_POLL = { pollingIntervalSeconds: 0.5 };
+const HANDLER_SLEEP_MS = 1500;
 
 /** Polls `check` every `intervalMs` until it returns true or `timeoutMs` elapses. */
 async function waitUntil(check: () => boolean, timeoutMs: number, intervalMs = 100): Promise<void> {
@@ -45,14 +61,14 @@ describe.skipIf(!live)("notify.send queue singleton policy (real Postgres + real
         active++;
         maxActive = Math.max(maxActive, active);
         try {
-          await new Promise((r) => setTimeout(r, 400));
+          await new Promise((r) => setTimeout(r, HANDLER_SLEEP_MS));
         } finally {
           active--;
           completed++;
         }
       };
-      await client1.work(queueName, handler, { policy: "singleton" });
-      await client2.work(queueName, handler, { policy: "singleton" });
+      await client1.work(queueName, handler, { policy: "singleton", ...FAST_POLL });
+      await client2.work(queueName, handler, { policy: "singleton", ...FAST_POLL });
     });
 
     afterAll(async () => {
@@ -72,9 +88,13 @@ describe.skipIf(!live)("notify.send queue singleton policy (real Postgres + real
     });
   });
 
-  // Companion regression-test-for-the-test: proves the methodology above actually
-  // detects overlap when it's allowed to happen, so a future change to this file
-  // can't silently make the singleton assertion vacuous.
+  // Companion regression-test-for-the-test: proves the methodology above actually detects
+  // overlap when it's allowed to happen, so a future change to this file can't silently make
+  // the singleton assertion vacuous. With fast polling and a handler sleep well longer than the
+  // poll interval, this is no longer a matter of luck: both clients WILL attempt a fetch while
+  // the first job is still active, and under "standard" policy that fetch WILL succeed. This
+  // must be a strict `=== 2`, the same way the singleton case above is a strict `=== 1` — a
+  // control that can't fail isn't a control.
   describe("standard policy allows same-key jobs to overlap (sanity check on the test methodology)", () => {
     const queueName = `test-standard-${tag}`;
     let client1: QueueClient;
@@ -93,14 +113,14 @@ describe.skipIf(!live)("notify.send queue singleton policy (real Postgres + real
         active++;
         maxActive = Math.max(maxActive, active);
         try {
-          await new Promise((r) => setTimeout(r, 400));
+          await new Promise((r) => setTimeout(r, HANDLER_SLEEP_MS));
         } finally {
           active--;
           completed++;
         }
       };
-      await client1.work(queueName, handler, { policy: "standard" });
-      await client2.work(queueName, handler, { policy: "standard" });
+      await client1.work(queueName, handler, { policy: "standard", ...FAST_POLL });
+      await client2.work(queueName, handler, { policy: "standard", ...FAST_POLL });
     });
 
     afterAll(async () => {
@@ -108,7 +128,7 @@ describe.skipIf(!live)("notify.send queue singleton policy (real Postgres + real
       await client2.stop();
     });
 
-    it("can observe both jobs active at once under standard policy", async () => {
+    it("observes both jobs active at once under standard policy", async () => {
       const singletonKey = `standard-test:${tag}`;
       await client1.send(queueName, {}, { singletonKey });
       await client2.send(queueName, {}, { singletonKey });
@@ -116,24 +136,15 @@ describe.skipIf(!live)("notify.send queue singleton policy (real Postgres + real
       await waitUntil(() => completed >= 2, 10_000);
 
       expect(completed).toBe(2);
-      // Timing-dependent: two independent pg-boss clients polling on their own
-      // schedules may not always fetch within the same 400ms window. We require
-      // at least one job ran (trivially true) and log if overlap wasn't observed,
-      // but the meaningful, non-flaky assertion is the contrast with the singleton
-      // case above, which is always exactly 1. See the task report for reasoning.
-      if (maxActive < 2) {
-        console.warn(
-          `[queue.singleton-policy.live.test] standard-policy overlap not observed this run (maxActive=${maxActive}); ` +
-            "this is a timing-dependent sanity check, not a strict requirement."
-        );
-      }
-      expect(maxActive).toBeGreaterThanOrEqual(1);
+      expect(maxActive).toBe(2);
     });
   });
 
-  // The actual regression test for the real bug class this task closes: two
-  // independent worker registrations processing the SAME notification id must
-  // deliver exactly once, with no duplicate email/WhatsApp send.
+  // The actual regression test for the real bug class this task closes: two independent worker
+  // registrations processing the SAME notification id must deliver exactly once, with no
+  // duplicate email/WhatsApp send, even when a second delivery attempt is forced to race the
+  // first (as sweepPendingNotifications could if it fired while the original job was still
+  // mid-flight on a slow vendor call).
   describe("notify.send double-delivery regression (real notify() + real deliverNotification, fake vendors)", () => {
     let pool: Pool;
     let dbClient1: ReturnType<typeof createRealDatabase>;
@@ -145,22 +156,32 @@ describe.skipIf(!live)("notify.send queue singleton policy (real Postgres + real
       pool = new Pool({ connectionString: process.env.DATABASE_URL });
       const rawPool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-      // One-time dev-database fixup: this repo's `notify.send` queue was created long
-      // ago (before this fix) under pg-boss's default "standard" policy. pg-boss's
-      // createQueue is ON CONFLICT DO NOTHING, so simply calling createQueue with
-      // policy: "singleton" again would silently be a no-op and this test would not
-      // actually exercise singleton enforcement. Deleting only the queue's
-      // registration row (not the whole pgboss schema, not other queues' job
-      // history) lets pg-boss recreate it fresh with the policy the next
-      // createQueue call passes. A fresh/first-ever database needs no such step.
+      // One-time dev-database fixup: this repo's `notify.send` queue was created long ago
+      // (before this fix) under pg-boss's default "standard" policy. pg-boss's createQueue is
+      // ON CONFLICT DO NOTHING, so simply calling createQueue with policy: "singleton" again
+      // would silently be a no-op and this test would not actually exercise singleton
+      // enforcement. Deleting only the queue's registration row (not the whole pgboss schema,
+      // not other queues' job history) lets pg-boss recreate it fresh with the policy the next
+      // createQueue call passes. A fresh/first-ever database needs no such step — and, if this
+      // file is filtered to run standalone (`-t` to just this describe block) before the pgboss
+      // schema has ever been created by any client `start()`, `pgboss.queue`/`pgboss.job_common`
+      // may not exist yet at all, so every statement below is guarded with `to_regclass(...)`.
       //
       // pgboss.job_common has `q_fkey FOREIGN KEY (name) REFERENCES pgboss.queue(name)
-      // ON DELETE RESTRICT` — any prior notify.send job rows (this dev database has a
-      // handful of old completed ones from earlier manual/dev testing) block deleting
-      // the queue row until they're gone too. This only removes notify.send's own job
-      // history, never touches other queues' rows.
-      await rawPool.query("DELETE FROM pgboss.job_common WHERE name = 'notify.send'");
-      await rawPool.query("DELETE FROM pgboss.queue WHERE name = 'notify.send'");
+      // ON DELETE RESTRICT` — any prior notify.send job rows (this dev database has a handful
+      // of old completed ones from earlier manual/dev testing) block deleting the queue row
+      // until they're gone too. This only removes notify.send's own job history, never touches
+      // other queues' rows.
+      const jobCommonExists = await rawPool.query<{ reg: string | null }>(
+        "select to_regclass('pgboss.job_common') as reg"
+      );
+      if (jobCommonExists.rows[0]?.reg) {
+        await rawPool.query("DELETE FROM pgboss.job_common WHERE name = 'notify.send'");
+      }
+      const queueTableExists = await rawPool.query<{ reg: string | null }>("select to_regclass('pgboss.queue') as reg");
+      if (queueTableExists.rows[0]?.reg) {
+        await rawPool.query("DELETE FROM pgboss.queue WHERE name = 'notify.send'");
+      }
       await rawPool.end();
 
       dbClient1 = createRealDatabase(drizzle(pool));
@@ -195,10 +216,12 @@ describe.skipIf(!live)("notify.send queue singleton policy (real Postgres + real
         maxInFlight = Math.max(maxInFlight, inFlight);
         try {
           const { notificationId } = payload as { notificationId: string };
-          // Artificial delay simulates a slow vendor call, widening the window in
-          // which a second delivery could race the first if singleton enforcement
-          // were absent.
-          await new Promise((r) => setTimeout(r, 300));
+          // Artificial delay simulates a slow vendor call, and — same reasoning as FAST_POLL/
+          // HANDLER_SLEEP_MS above — is long enough relative to the 0.5s poll interval that the
+          // second (duplicate) job is essentially guaranteed to have its own fetch attempted
+          // while this one is still active, actually exercising the singleton enforcement
+          // rather than just getting lucky on ordering.
+          await new Promise((r) => setTimeout(r, HANDLER_SLEEP_MS));
           await deliverNotification(deps, notificationId);
           handledCount++;
         } finally {
@@ -209,8 +232,8 @@ describe.skipIf(!live)("notify.send queue singleton policy (real Postgres + real
       // Registers notify.send under "singleton" policy — this call is what actually
       // (re)creates the queue after the beforeAll fixup deleted its old "standard"
       // registration.
-      await queueClient1.work("notify.send", wrapHandler(deliveryDeps1), { policy: "singleton" });
-      await queueClient2.work("notify.send", wrapHandler(deliveryDeps2), { policy: "singleton" });
+      await queueClient1.work("notify.send", wrapHandler(deliveryDeps1), { policy: "singleton", ...FAST_POLL });
+      await queueClient2.work("notify.send", wrapHandler(deliveryDeps2), { policy: "singleton", ...FAST_POLL });
 
       await notify(
         { db: dbClient1, queue: queueClient1 },
@@ -234,10 +257,14 @@ describe.skipIf(!live)("notify.send queue singleton policy (real Postgres + real
         { singletonKey: `notify:${notificationId}`, policy: "singleton" }
       );
 
-      await waitUntil(() => handledCount >= 1, 10_000);
-      // Give any wrongly-overlapping second delivery a chance to have run too.
-      await new Promise((r) => setTimeout(r, 500));
+      // Don't assert until BOTH the original and the duplicate job have actually run — the
+      // duplicate is serialized behind the first, not dropped, so it should complete too (its
+      // deliverNotification call is just a no-op thanks to the status === "sent" guard).
+      // Asserting after only the first `handledCount >= 1` could pass before the serialized
+      // duplicate had even started.
+      await waitUntil(() => handledCount >= 2, 10_000);
 
+      expect(handledCount).toBe(2);
       expect(maxInFlight).toBe(1);
       expect(sent1.length + sent2.length).toBe(1);
 

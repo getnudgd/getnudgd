@@ -36,6 +36,25 @@ export interface SendOptions {
   policy?: QueuePolicy;
 }
 
+export interface WorkOptions {
+  /**
+   * `policy`, like `SendOptions.policy` on send(), only takes effect if this
+   * queue name has never been created before in this database (createQueue is
+   * ON CONFLICT DO NOTHING; updateQueue refuses to change policy after creation).
+   */
+  policy?: QueuePolicy;
+  /**
+   * Overrides pg-boss's default 2-second idle poll interval (minimum 0.5s) for this
+   * worker's fetch loop. This is NOT a constructor/instance-wide setting in pg-boss —
+   * `pollingIntervalSeconds` lives on `WorkOptions`, passed per work() registration
+   * (see node_modules/pg-boss/dist/types.d.ts's `JobPollingOptions`/`WorkOptions`;
+   * there is no such field on `ConstructorOptions`). Production callers should
+   * normally omit this and take the default; it exists so tests can force fast,
+   * deterministic polling instead of racing pg-boss's default cadence.
+   */
+  pollingIntervalSeconds?: number;
+}
+
 export interface QueueClient {
   /**
    * Contract: callers must call start() before work(), schedule(), or send()
@@ -45,11 +64,6 @@ export interface QueueClient {
   start(): Promise<void>;
   stop(): Promise<void>;
   send(queueName: string, payload: unknown, options?: SendOptions): Promise<string | null>;
-  /**
-   * `options.policy`, like `SendOptions.policy` on send(), only takes effect if this
-   * queue name has never been created before in this database (createQueue is
-   * ON CONFLICT DO NOTHING; updateQueue refuses to change policy after creation).
-   */
-  work(queueName: string, handler: JobHandler, options?: { policy?: QueuePolicy }): Promise<void>;
+  work(queueName: string, handler: JobHandler, options?: WorkOptions): Promise<void>;
   schedule(queueName: string, cron: string, payload: unknown): Promise<void>;
 }

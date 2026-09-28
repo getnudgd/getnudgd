@@ -40,6 +40,9 @@ export const PENDING_SWEEP_BATCH = 100;
 // be `active` at once, queue-wide, across any number of workers/processes. Combined with
 // deliverNotification's own `status === "sent"` guard, this closes the double-delivery window
 // (e.g. the sweep re-enqueueing while the original job is still mid-flight on a slow vendor call).
+// It does not close every gap: a handler that outlives the queue's expire_seconds (15 min default)
+// can still be retried while "active" in some edge cases, and a vendor send that succeeds right
+// before a crash — before markSent() persists — can still redeliver on the next attempt.
 async function enqueueDelivery(queue: QueueClient, notificationId: string): Promise<void> {
   await queue.send(
     "notify.send",
