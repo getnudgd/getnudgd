@@ -23,23 +23,26 @@ function makeSpyQueue(): {
   queue: QueueClient;
   handlers: Record<string, JobHandler>;
   scheduled: Array<{ queueName: string; cron: string }>;
+  workCalls: Array<{ queueName: string; options?: { policy?: string } }>;
 } {
   const handlers: Record<string, JobHandler> = {};
   const scheduled: Array<{ queueName: string; cron: string }> = [];
+  const workCalls: Array<{ queueName: string; options?: { policy?: string } }> = [];
   const queue: QueueClient = {
     async start() {},
     async stop() {},
     async send() {
       return null;
     },
-    async work(queueName, handler) {
+    async work(queueName, handler, options) {
       handlers[queueName] = handler;
+      workCalls.push({ queueName, options });
     },
     async schedule(queueName, cron) {
       scheduled.push({ queueName, cron });
     },
   };
-  return { queue, handlers, scheduled };
+  return { queue, handlers, scheduled, workCalls };
 }
 
 describe("startWorker", () => {
@@ -113,7 +116,7 @@ describe("startWorker", () => {
       payload: { requestId: "r1", companyName: "Acme" },
       idempotencyKey: "seed:worker-notify",
     });
-    const { queue, handlers } = makeSpyQueue();
+    const { queue, handlers, workCalls } = makeSpyQueue();
     const { sender: email, sent } = createFakeEmailSender();
     const { gateway: whatsapp } = createFakeWhatsAppGateway();
 
@@ -123,6 +126,8 @@ describe("startWorker", () => {
     expect(sent).toHaveLength(1);
     const updated = await db.notifications.getById(notification.id);
     expect(updated?.status).toBe("sent");
+    const notifySendCall = workCalls.find((c) => c.queueName === "notify.send");
+    expect(notifySendCall?.options?.policy).toBe("singleton");
   });
 
   it("registers notifications.sweep, schedules it every 15 minutes, and the handler is a no-op for a fresh pending row", async () => {

@@ -19,11 +19,15 @@ export function createFakeQueueClient(): QueueClient {
       if (handler) await handler(payload);
       return `fake-job-${queues[queueName].length}`;
     },
-    async work(queueName, handler) {
+    async work(queueName, handler, _options) {
       // Mirrors the real client (queue.real.ts), where work() calls
       // boss.createQueue() first, which requires start() to have already
       // opened the database connection.
       if (!started) throw new Error(`QueueClient.work("${queueName}") called before start()`);
+      // `_options` (policy, pollingIntervalSeconds) is accepted for interface compatibility
+      // but ignored here: the fake has no independent workers or polling — send() just
+      // `await`s the registered handler inline in the caller's own await chain, so there is
+      // nothing for a singleton policy or a poll interval to protect against or govern.
       handlers[queueName] = handler;
     },
     async schedule(queueName, _cron, _payload) {
