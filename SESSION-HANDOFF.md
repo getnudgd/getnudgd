@@ -1,20 +1,20 @@
-# GetNudgd — Session Handoff (rewritten 2026-09-28, after the rewards-module merge)
+# GetNudgd — Session Handoff (rewritten 2026-09-29, after closing the notifications hard gate)
 
 Written for a fresh Claude Code session (or Anmol) picking this up cold. Read this first, then `AGENTS.md` (the binding engineering spec), then `USER-FLOWS.md` (page-by-page UX reference) if you need product/UX detail. `PRD.md`/`TRD.md` are the requirements docs those draw from.
 
-This file replaces the 2026-09-25 version, which said the rewards module was the next step. It is now built and merged.
+This file replaces the 2026-09-28 version, which listed the `singletonKey`-does-not-dedupe hard gate as still open. It is now closed.
 
 ---
 
 ## 0. TL;DR — where things stand
 
-- `main` has everything through **Phase 1 Timers**, the **notifications module** (plus its hardening and a queue hotfix), and the **rewards module**. Merge commits, in order: notifications `ea8c24d`, queue hotfix `1be49d3`, notifications hardening `f298daa`, rewards `b25385b` (all `--no-ff`). The handoff commit sits on top.
-- **Nothing is in flight.** No worktrees, no open branches besides `main`.
+- `main` has everything through **Phase 1 Timers**, the **notifications module** (plus its hardening and a queue hotfix), the **rewards module**, and the **notify.send singleton-policy fix**. Merge commits, in order: notifications `ea8c24d`, queue hotfix `1be49d3`, notifications hardening `f298daa`, rewards `b25385b`, singleton policy `f7e31e6` (all `--no-ff`). The handoff commit sits on top.
+- **Nothing is in flight.** No open branches besides `main`. One cosmetic loose end: `.worktrees/notify-singleton-policy/` is deregistered from git (`git worktree list` no longer shows it, its branch is deleted) but the directory itself is still on disk — `rm -rf` failed with "Device or resource busy" and no node/build process was found holding it, so something outside this session (Explorer, another terminal window) likely has it open. It is inert; delete it by hand once whatever has it open is closed.
 - **Nothing has been pushed.** `origin/main` is far behind local `main` and stays that way until Anmol says to push.
-- Verified on `main` after the rewards merge: `npm run lint` clean, `npm run typecheck` clean, `npm test` 49 files passed + 2 skipped (492 tests passed, 12 skipped — the two opt-in live-test files), and both live-test files pass (12/12) against the dev Postgres with all 12 migrations applied.
+- Verified on `main` after the singleton-policy merge: `npm run lint` clean, `npm run typecheck` clean, `npm test` 49 files passed + 3 skipped (501 tests passed, 15 skipped — three opt-in live-test files), and all three live-test files pass (15/15) against the dev Postgres.
 - Untracked and deliberately not committed (waiting for Anmol to say so): `PRD.md`, `TRD.md`, `USER-FLOWS.md`.
 
-**Phase 1 backend is now functionally complete except for Playwright flows and the notifications hard gate below.** The next step is Anmol's call between: (a) the Playwright critical-flow tests that close out AGENTS.md's Phase 1 backend backlog, (b) starting the frontend (still zero real screens — see §3), or (c) closing the notifications `singletonKey` hard gate (§2) before either real vendor lands. A paste-ready prompt for whichever is chosen is in §9; it asks first rather than assuming.
+**Phase 1 backend is now functionally complete except for Playwright flows.** The notifications hard gate that used to be the other blocker is closed (§1a). The next step is Anmol's call between: (a) the Playwright critical-flow tests that close out AGENTS.md's Phase 1 backend backlog, (b) starting the frontend (still zero real screens — see §3), or (c) deciding the interview-confirmation design so rewards' tranche 2 can be wired (§5 item 2). A paste-ready prompt for whichever is chosen is in §9; it asks first rather than assuming.
 
 ---
 
@@ -48,9 +48,28 @@ Spec: `docs/superpowers/specs/2026-09-25-rewards-module-design.md` (founder-appr
 - Standalone `Database.rewards.releaseTranche` has no production caller today (tranche 1 goes through `applyTransition`); if tranche 2 is ever called this way directly instead of through `applyTransition`, two concurrent calls for the same `(requestId, tranche)` throw a unique-violation instead of returning the existing reward (no double payment, just an avoidable error — catch-and-re-read if this path is ever used standalone).
 - A handful of test-quality-only minors are listed at the end of the plan file (weaker-than-ideal assertions in a couple of replay tests); none affect production code.
 
-### Notifications hard gate — still open, unrelated to rewards
+---
 
-Carried over from the notifications-hardening merge, unaffected by this branch: the `notify:{id}` `singletonKey` does **not** dedupe on pg-boss's default `standard` queue policy. Double delivery is prevented today only by a single worker running one job at a time plus `deliverNotification`'s `status === "sent"` guard. **This must be closed before any real `EmailSender`/`WhatsAppGateway` is wired, or before running more than one worker/increasing concurrency.** Fix: an atomic claim (`UPDATE notifications SET status='sending' WHERE id=$1 AND status IN ('pending','failed') RETURNING`) or a deduplicating queue policy (needs a new queue name on existing databases, since policy is set at queue creation).
+## 1a. Notifications hard gate — CLOSED (merge `f7e31e6`, 2026-09-29)
+
+The `notify:{id}` `singletonKey` used to do nothing under pg-boss's default `standard` queue policy — double delivery was prevented only by a single worker running one job at a time plus `deliverNotification`'s `status === "sent"` guard.
+
+**Fix:** the `notify.send` queue is now created with pg-boss's `singleton` policy, under which at most one job with a given key can be `active` at a time, queue-wide, regardless of worker count. No schema change, no new status, no claim logic — pg-boss already had this policy built in.
+
+| Piece | Where |
+|---|---|
+| `QueuePolicy` type, `SendOptions.policy`, `QueueClient.work()`'s new third parameter (`{ policy?, pollingIntervalSeconds? }`) | `src/jobs/queue.ts` |
+| `send()`/`work()` forward `policy` into `boss.createQueue()`; `work()` also warns (`console.error`, never throws) if a queue already existed under a different policy — `createQueue` is `ON CONFLICT DO NOTHING`, so an existing queue silently keeps its old policy otherwise | `src/jobs/queue.real.ts` |
+| `enqueueDelivery` (used by both `notify()` and the sweep) and `worker.ts`'s `notify.send` registration both request `policy: "singleton"`, so whichever process creates the queue first in a fresh database gets it right | `src/modules/notifications/notifications.ts`, `src/jobs/worker.ts` |
+| Opt-in live test: two independent `createRealQueueClient` instances (simulating two worker processes) proving (a) same-key jobs never overlap under `singleton` policy, (b) a control case under `standard` policy that DOES overlap (so the test methodology is proven to detect the problem, not just assert a tautology), and (c) the real `notify()`/`deliverNotification` path delivers exactly once under a forced duplicate-enqueue race | `src/jobs/queue.singleton-policy.live.test.ts` |
+
+**Live-verified on 2026-09-29**, multiple runs across two sessions (implementer: 3 runs; controller, independently: 2 more), all identical: 3/3 passing, skipped cleanly by default with no `RUN_VENDOR_TESTS`.
+
+**One-time dev-database fixup baked into the live test's `beforeAll`:** any `notify.send` queue created before this fix (this repo's dev DB included) keeps its old `standard` policy forever because of `ON CONFLICT DO NOTHING` — the live test deletes that queue's rows (`pgboss.job_common` then `pgboss.queue`, scoped to `name = 'notify.send'` only, guarded with `to_regclass()` so it doesn't error on a schema-less database) so it gets recreated correctly. **A first-ever production deploy needs no such step** — the queue doesn't exist yet, so it's created with `singleton` policy from the start. A database that was deployed BEFORE this fix ships would need the same one-time deletion (or `boss.deleteQueue("notify.send")` while idle) — there is no automated migration for it since pg-boss owns that schema, not Drizzle.
+
+**Residual, documented, not blocking:** singleton policy serializes same-key jobs but doesn't replace `deliverNotification`'s own `status === "sent"` guard — exactly-once still depends on both together. If a handler somehow outlives pg-boss's `expire_seconds` (15 min default) the active slot frees up before the handler actually finishes; keep vendor calls well under that. A vendor send succeeding right before a crash before `markSent` persists is the same pre-existing at-least-once gap as always — not something this fix claims to close.
+
+**Process note:** this task hit two mid-session interruptions (a stopped subagent losing its own report-writing step, then a backgrounded shell command that silently died across a session boundary) with real, correct, uncommitted work sitting in the worktree both times. Both times the fix was the same: check `git status`/`git diff` on the actual worktree, confirm the work already matches what was asked, and dispatch a *fresh* agent whose job is only to verify-and-commit — never assume a stopped agent can be resumed (`SendMessage` to one returns an explicit "stopped ... won't be resumed" and must not be retried), and never re-derive already-correct work from scratch.
 
 ---
 
@@ -70,9 +89,10 @@ Everything below is tested, reviewed (implementer → task reviewer → fix loop
 | Notifications (merge `ea8c24d`) | See the notifications plan's own follow-up section. |
 | Queue hotfix (merge `1be49d3`) | `queue.real.ts` omits unset pg-boss options (found by a live run). |
 | Notifications hardening (merge `f298daa`) | Event-derived notification idempotency (migration `0010`), pending sweep, failure bookkeeping, opt-in live integration test. |
-| **Rewards** (merge `b25385b`) | See §1. Follow-ups: the last section of the rewards plan. |
+| Rewards (merge `b25385b`) | See §1. Follow-ups: the last section of the rewards plan. |
+| **notify.send singleton policy** (merge `f7e31e6`) | Closes the notifications hard gate. See §1a. No plan/spec file — bounded task, design agreed in chat. |
 
-**Migrations on `main`:** `0000`–`0011`.
+**Migrations on `main`:** `0000`–`0011` (this task added no migration — pg-boss owns its own schema, not Drizzle).
 
 ---
 
@@ -113,8 +133,8 @@ Canonical detail is in `USER-FLOWS.md` §9. Short version:
 4. **`admin_audit_log` mandatory-write is per-call-site, not type-enforced.** `applyTransition`'s `adminAudit` is optional; a future admin mutation could forget it and still compile. Add an `applyAdminTransition` with a required field before more admin actions.
 5. **Weekly Insider capacity limits are tracked but not enforced.** Needs the `insider.weeklyReset` cron and an enforcement design first.
 6. **`authorize.ts` has no `insiderRequest` resource type**, and `submitProof`/`reviewProof`/`requestRedemption` take no actor identity. All must change when server actions wire these modules up.
-7. **No adapter contract tests** (`RUN_VENDOR_TESTS=1` fake/real parity suite from AGENTS.md §3.8) — each module instead got its own bespoke opt-in live test (notifications, rewards). Works, but isn't the systematic contract suite the spec describes.
-8. **Notifications hard gate and rewards follow-ups** — see §1. Timers follow-ups are in the Timers plan doc; read it before touching `requests.ts` sweep/expire again.
+7. **No adapter contract tests** (`RUN_VENDOR_TESTS=1` fake/real parity suite from AGENTS.md §3.8) — each module instead got its own bespoke opt-in live test (notifications, rewards, the singleton-policy queue fix). Works, but isn't the systematic contract suite the spec describes.
+8. **Rewards follow-ups** — see §1. Timers follow-ups are in the Timers plan doc; read it before touching `requests.ts` sweep/expire again. The notifications hard gate (formerly here) is closed — see §1a.
 
 ---
 
@@ -159,6 +179,9 @@ Ledger rule: each plan's ledger is `.superpowers/sdd/<plan-basename>/progress.md
 - **Plan text isn't gospel.** The notifications plan mandated raw HTML interpolation of user values in email (an injection hole) and excused a missing already-sent guard on a message send; reviewers flagged both. Tell reviewers plan-mandated defects still count, and put exact fix instructions in the fix message to save a round.
 - **Locking money code needs an explicit, stated isolation-level assumption**, not just a working test. The rewards final review required naming READ COMMITTED explicitly in a code comment next to every overspend-style lock — the check is only correct at that isolation level, and nothing in the code enforces it.
 - Implementer subagents can stall (stream watchdog, 600 s of no progress) or a session can hit a rate limit mid-task with no commit made. Either way: verify the worktree's actual state (`git status`, `git log`, run the focused tests) before re-dispatching. If nothing was committed, discard any uncommitted partial files and redispatch fresh rather than trying to resume a subagent whose process is gone.
+- **A stopped subagent cannot be resumed — don't retry `SendMessage` to one.** It returns an explicit refusal ("was stopped by the user and won't be resumed"). If its uncommitted work is still sitting in the worktree and looks complete and correct (read the diff yourself first), dispatch a *fresh* agent whose only job is to verify and commit it — don't have it redo the design/implementation from scratch, and don't have the controller commit code it didn't write itself.
+- **A shell command this tool auto-backgrounds (it exceeded the timeout) can die silently across a session interruption**, leaving its output file empty forever with no error and no completion notice. Don't wait on it indefinitely — after a session hiccup, re-check `git log`/`git status` directly and just re-run the command (in smaller steps, e.g. merge, then lint, then typecheck, then test separately) rather than trusting the backgrounded one is still working.
+- **Two independent `createRealQueueClient`/`PgBoss` instances in one test file is a legitimate way to simulate two worker processes** for a concurrency test — cheaper than spinning up real separate processes, and it exercises genuinely separate connections/pollers. But a live concurrency test needs its own control case proving the test methodology can detect the failure it claims to prevent (e.g. a "standard policy" comparison run alongside a "singleton policy" one) — the first version of the singleton-policy live test had its control assertion silently loosened to a tautology (`>= 1`) because the two clients' polls didn't reliably overlap within the handler's sleep window; the fix was to control the poll interval explicitly (`pollingIntervalSeconds`, pg-boss's per-`work()`-call minimum is 0.5s) rather than guess at a sleep duration longer than an undocumented default.
 - `git worktree remove` can leave the directory behind with "Permission denied" if the shell cwd is inside it; the worktree is still deregistered — just `rm -rf` the leftover directory from outside it.
 - The shell cwd can end up inside a worktree. Use absolute paths, and never run shared-checkout git from inside a worktree.
 - Never use bare `git stash` — the stash stack is shared across worktrees and sessions.
@@ -174,47 +197,62 @@ The user wants the final commit, when everything in AGENTS.md is done, tagged/co
 
 ## 9. Paste-ready prompt for the new session
 
-Copy everything between the lines into the new session. It asks Anmol to choose the next step rather than assuming one, since Phase 1 backend, the notifications hard gate, and the frontend are all plausible next moves.
+Copy everything between the lines into the new session. It asks Anmol to choose the next step rather than assuming one.
 
 ```
 Continue GetNudgd. First read C:\Users\dml-anmol\Claude\Caveman\getnudgd\SESSION-HANDOFF.md
 fully, then AGENTS.md, and node_modules/next/dist/docs/ before any Next.js code.
 
 Situation: main has Phase 0, Phase 1 Identity/Insiders/Requests/Proof/Timers, notifications
-(plus hardening and a queue hotfix), and the rewards module — all merged, lint/typecheck
-clean, 492 tests passing + 12 skipped (opt-in live tests, both re-verified passing on
-2026-09-28). Nothing is in flight, nothing is pushed, no worktrees exist. PRD.md, TRD.md,
-USER-FLOWS.md are untracked; do not commit them unless Anmol says so.
+(plus hardening, a queue hotfix, and the singleton-policy fix that closed the notifications
+hard gate), and the rewards module — all merged, lint/typecheck clean, 501 tests passing +
+15 skipped (three opt-in live-test files, all re-verified passing on 2026-09-29). Nothing is
+in flight, nothing is pushed. One cosmetic loose end: an empty, git-deregistered worktree
+directory at .worktrees/notify-singleton-policy/ that `rm -rf` couldn't delete ("Device or
+resource busy", no process found holding it) — try deleting it again; if it still won't go,
+leave it, it's inert. PRD.md, TRD.md, USER-FLOWS.md are untracked; do not commit them unless
+Anmol says so.
 
 Do this, in order:
 1. Verify: `git status --short`, `git log --oneline -5`, `git worktree list`. ListAgents
    to make sure no other session is working in this repo. Confirm Docker Desktop is running
    before anything that needs Postgres (it has not reliably been running at session start).
-2. Ask Anmol which of these three is next (SESSION-HANDOFF §0 lays out the tradeoffs) — do
-   not assume:
+2. Ask Anmol which of these is next (SESSION-HANDOFF §0 lays out the tradeoffs) — do not
+   assume:
    a. Playwright critical-flow tests (closes out AGENTS.md's Phase 1 backend backlog: send
       -> accept -> proof -> verify -> interview; send -> decline -> refund; send -> expiry
       -> refund).
    b. Start the frontend — zero real screens exist yet for any backend module built so far.
-   c. Close the notifications `singletonKey`-does-not-dedupe hard gate (SESSION-HANDOFF §1)
-      before any real EmailSender/WhatsAppGateway or worker-concurrency change.
-   d. Something else Anmol has in mind (e.g. deciding the interview-confirmation design so
-      rewards' tranche 2 can be wired — SESSION-HANDOFF §5 item 2).
-3. Whichever is chosen: superpowers:brainstorming (if it's new design work) -> spec in
-   docs/superpowers/specs/ -> superpowers:writing-plans -> plan in docs/superpowers/plans/,
-   commit both to main. Worktree off LOCAL main (manual `git worktree add`), copy .env.local,
-   verify baseline, then superpowers:subagent-driven-development. Models, set explicitly per
-   task in the plan: implementers sonnet; reviewers sonnet for small/mechanical diffs, opus
-   for money/state-transition/idempotency/concurrency/message-sending tasks and the final
-   whole-branch review. Pass briefs/reports/diffs as file paths, never pasted. Put known
-   pitfalls in each brief up front; carry any hardening one task's review finds forward into
-   the next task explicitly, with a test.
-4. Any change to a real adapter (`*.real.ts`) needs its own opt-in `*.live.test.ts` against
-   the dev Postgres before merge — fakes can't catch vendor-library validation bugs.
-5. When done: final whole-branch review on opus, one fix wave if needed, one scoped
-   re-review, finishing-a-development-branch with a MERGE COMMIT into main, re-run
-   lint/typecheck/tests (and any live tests touched) on main, DO NOT PUSH, remove the
-   worktree, delete the branch, update SESSION-HANDOFF.md and commit it.
+   c. Decide the interview-confirmation design so rewards' tranche 2 can be wired
+      (SESSION-HANDOFF §5 item 2).
+   d. Something else Anmol has in mind.
+3. Classify the chosen work per superpowers:brainstorming (spike / bounded / architectural)
+   BEFORE assuming a full spec+plan is needed — the singleton-policy fix (SESSION-HANDOFF
+   §1a) was correctly bounded: a short in-chat design, approval, then straight to a worktree
+   and implementation, no spec/plan file. For architectural work: superpowers:brainstorming
+   -> spec in docs/superpowers/specs/ -> superpowers:writing-plans -> plan in
+   docs/superpowers/plans/, commit both to main. Either way: worktree off LOCAL main (manual
+   `git worktree add`), copy .env.local, verify baseline, then implement (subagent-driven for
+   anything with a plan; a single implementer+reviewer dispatch pair is fine for a bounded
+   fix). Models, set explicitly: implementers sonnet; reviewers sonnet for small/mechanical
+   diffs, opus for money/state-transition/idempotency/concurrency/message-sending tasks and
+   any final whole-branch review. Pass briefs/reports/diffs as file paths, never pasted. Put
+   known pitfalls in each brief up front; carry any hardening one task's review finds forward
+   into the next task explicitly, with a test.
+4. Any change to a real adapter (`*.real.ts`) or to how a queue/job is created needs its own
+   opt-in `*.live.test.ts` against the dev Postgres before merge, with a control case proving
+   the test can actually detect the failure it claims to prevent (not just assert a tautology)
+   — fakes can't catch vendor-library validation or concurrency bugs.
+5. If a subagent or a background shell command goes silent across a session interruption,
+   don't assume it's still working: check `git log`/`git status` on the real worktree
+   directly. A stopped subagent cannot be resumed (SendMessage will refuse) — if its
+   uncommitted work is already there and correct, dispatch a fresh agent to verify-and-commit
+   it, not redo it.
+6. When done: final whole-branch review on opus (skip only for a genuinely small bounded fix,
+   per this session's own precedent, but still get an opus review of the diff), one fix wave
+   if needed, one scoped re-review, finishing-a-development-branch with a MERGE COMMIT into
+   main, re-run lint/typecheck/tests (and any live tests touched) on main, DO NOT PUSH, remove
+   the worktree, delete the branch, update SESSION-HANDOFF.md and commit it.
 
 Stop and ask Anmol only for irreversible or security-sensitive actions, or if the plan is
 broken so every path forward is a guess. End by telling him the final main SHA and whether
