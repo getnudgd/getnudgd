@@ -16,6 +16,23 @@ function setupFailure(reason: string): Error {
   );
 }
 
+// Counts notify.send jobs pg-boss still has outstanding (queued or retrying, and due).
+// Real finding from 2026-09-30: pg-boss defaults to batchSize 1 with a 2000ms poll
+// interval (see queue.real.ts's work(), which sets neither), so this queue clears
+// roughly 0.5 jobs/s. A vitest live-test run that enqueues notify.send jobs without a
+// consumer running (or a stale malformed row a template no longer accepts) leaves a
+// backlog that silently eats into every later flow's notification-wait budget — the
+// failure then reads as "notification never reached sent", which looks like a
+// delivery bug, not environment debris. This check turns that into a named, fail-fast
+// setup error instead.
+export async function checkNotifySendBacklog(pool: Pool): Promise<number> {
+  const { rows } = await pool.query<{ count: string }>(
+    "select count(*) as count from pgboss.job " +
+      "where name = 'notify.send' and state in ('created', 'retry') and start_after <= now()"
+  );
+  return Number(rows[0].count);
+}
+
 export default async function globalSetup(): Promise<void> {
   if (!process.env.DATABASE_URL) {
     throw setupFailure("DATABASE_URL is not set.");
@@ -37,6 +54,20 @@ export default async function globalSetup(): Promise<void> {
       throw setupFailure(
         "The latest seeded `rules` version has no `pointsPerCredit` — the rewards config placeholders " +
           "(rules version 2 or later) haven't been seeded."
+      );
+    }
+
+    const backlog = await checkNotifySendBacklog(pool);
+    if (backlog > 0) {
+      const estimateSeconds = Math.ceil(backlog / 0.5);
+      throw setupFailure(
+        `${backlog} outstanding notify.send job(s) are already queued on this database (pgboss.job, ` +
+          "state created/retry) — left over from an earlier vitest live-test run or a previous e2e run " +
+          "that didn't finish draining. pg-boss's default throughput here is about 0.5 jobs/s (batchSize " +
+          "1, 2000ms poll — see queue.real.ts), so this backlog alone could delay this run's own " +
+          `notification deliveries by roughly ${estimateSeconds}s, on top of anything this run adds. Drain it ` +
+          'first: start a worker against this DATABASE_URL (e.g. run one flow spec once, or `npm run ' +
+          "worker:dev` briefly with no e2e test running concurrently) and wait for it to catch up, then re-run."
       );
     }
   } catch (err) {
