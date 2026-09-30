@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { resetEnvCacheForTests } from "../config/env";
 import { getAdapters, resetAdaptersCacheForTests } from "./adapters";
 import { InvalidTokenError } from "../adapters/auth/types";
@@ -96,5 +99,22 @@ describe("getAdapters", () => {
     resetAdaptersCacheForTests();
     const second = getAdapters();
     expect(second).not.toBe(first);
+  });
+
+  it("uses the file mailbox sender when DEV_MAILBOX_PATH is set outside production", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "gn-mailbox-adapters-"));
+    const filePath = path.join(dir, "mailbox.jsonl");
+    process.env.DEV_MAILBOX_PATH = filePath;
+    resetEnvCacheForTests();
+    const adapters = getAdapters();
+    await adapters.email.send({ to: "a@b.com", subject: "Hi", html: "<p>hi</p>" });
+    expect(readFileSync(filePath, "utf8")).toContain("a@b.com");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("uses the plain fake sender when DEV_MAILBOX_PATH is unset", async () => {
+    const adapters = getAdapters();
+    const result = await adapters.email.send({ to: "a@b.com", subject: "Hi", html: "<p>hi</p>" });
+    expect(result.id).toMatch(/^fake-email-/);
   });
 });

@@ -14,6 +14,7 @@ import type { StorageAdapter } from "../adapters/storage/types";
 import { createFakeStorageAdapter } from "../adapters/storage/fake";
 import type { EmailSender } from "../adapters/email/types";
 import { createFakeEmailSender } from "../adapters/email/fake";
+import { createFileMailboxEmailSender } from "../adapters/email/file-mailbox";
 import type { WhatsAppGateway } from "../adapters/whatsapp/types";
 import { createFakeWhatsAppGateway } from "../adapters/whatsapp/fake";
 import type { GiftCardVendor } from "../adapters/giftcards/types";
@@ -68,7 +69,10 @@ export function getAdapters(): Adapters {
   const auth: AuthAdapter =
     env.NODE_ENV === "production" ? createRefusingAuthAdapter().adapter : createFakeAuthAdapter().adapter;
   const storage: StorageAdapter = createFakeStorageAdapter();
-  const email: EmailSender = createFakeEmailSender().sender;
+  const email: EmailSender =
+    env.NODE_ENV !== "production" && env.DEV_MAILBOX_PATH
+      ? createFileMailboxEmailSender(env.DEV_MAILBOX_PATH).sender
+      : createFakeEmailSender().sender;
 
   const whatsapp: WhatsAppGateway = createFakeWhatsAppGateway().gateway;
   const giftCards: GiftCardVendor = createManualFulfilmentVendor();
