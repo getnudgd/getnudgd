@@ -57,4 +57,44 @@ describe("getEnv", () => {
     process.env.SESSION_COOKIE_SECRET = "too-short";
     expect(() => getEnv()).toThrow(/SESSION_COOKIE_SECRET/);
   });
+
+  it("defaults DEV_LOGIN_ENABLED to false and DEV_MAILBOX_PATH to undefined", () => {
+    const env = getEnv();
+    expect(env.DEV_LOGIN_ENABLED).toBe(false);
+    expect(env.DEV_MAILBOX_PATH).toBeUndefined();
+  });
+
+  it("parses DEV_LOGIN_ENABLED=true in development", () => {
+    process.env.DEV_LOGIN_ENABLED = "true";
+    expect(getEnv().DEV_LOGIN_ENABLED).toBe(true);
+  });
+
+  it("parses DEV_LOGIN_ENABLED=false explicitly, not as truthy", () => {
+    process.env.DEV_LOGIN_ENABLED = "false";
+    expect(getEnv().DEV_LOGIN_ENABLED).toBe(false);
+  });
+
+  it("allows DEV_LOGIN_ENABLED=true when NODE_ENV=test, not just development", () => {
+    process.env = { ...process.env, NODE_ENV: "test" };
+    process.env.DEV_LOGIN_ENABLED = "true";
+    expect(() => getEnv()).not.toThrow();
+    expect(getEnv().DEV_LOGIN_ENABLED).toBe(true);
+  });
+
+  it("throws when DEV_LOGIN_ENABLED=true and NODE_ENV=production", () => {
+    process.env = { ...process.env, NODE_ENV: "production" };
+    process.env.DEV_LOGIN_ENABLED = "true";
+    expect(() => getEnv()).toThrow(/DEV_LOGIN_ENABLED/);
+  });
+
+  it("throws when DEV_MAILBOX_PATH is set and NODE_ENV=production", () => {
+    process.env = { ...process.env, NODE_ENV: "production" };
+    process.env.DEV_MAILBOX_PATH = "/tmp/mailbox.jsonl";
+    expect(() => getEnv()).toThrow(/DEV_MAILBOX_PATH/);
+  });
+
+  it("allows DEV_MAILBOX_PATH to be set outside production", () => {
+    process.env.DEV_MAILBOX_PATH = "/tmp/mailbox.jsonl";
+    expect(getEnv().DEV_MAILBOX_PATH).toBe("/tmp/mailbox.jsonl");
+  });
 });

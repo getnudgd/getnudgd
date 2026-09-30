@@ -6,6 +6,7 @@ import {
   RequestStateConflictError,
   InsufficientPointsError,
   RedemptionAlreadyResolvedError,
+  InsiderProfileAlreadyVerifiedError,
   assertSingleCurrency,
 } from "./types";
 
@@ -194,6 +195,20 @@ describe("createFakeDatabase identity", () => {
     await expect(db.identity.updateInsiderProfileCompany("nope", beta.id, "x@beta.com")).rejects.toThrow();
   });
 
+  it("refuses to change company for an already-verified profile, even when called directly (bypassing the module-level check)", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    const acme = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const beta = seedCompany({ name: "Beta", tier: "tier2" }, ["beta.com"]);
+    const user = await db.identity.findOrCreateUser("fb-verified-guard-1", "vg1@acme.com", "seeker");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, acme.id, "vg1@acme.com");
+    await db.identity.markInsiderVerified(profile.id, new Date());
+
+    await expect(db.identity.updateInsiderProfileCompany(profile.id, beta.id, "vg1@beta.com")).rejects.toThrow(
+      InsiderProfileAlreadyVerifiedError
+    );
+    expect((await db.identity.getInsiderProfileById(profile.id))?.companyId).toBe(acme.id);
+  });
+
   it("gets a seeker profile by id, and returns null when not found", async () => {
     const { db } = createFakeDatabase();
     const user = await db.identity.findOrCreateUser("fb-gsp1", "gsp1@x.com", "seeker");
@@ -213,6 +228,67 @@ describe("createFakeDatabase identity", () => {
   it("throws when setting phone for a nonexistent user", async () => {
     const { db } = createFakeDatabase();
     await expect(db.identity.setUserPhone("nope", "+911234567890")).rejects.toThrow();
+  });
+
+  it("returns one profile even when both calls are issued via Promise.all (fake has no true concurrency; real.live.test.ts proves this under actual concurrent writes)", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-race-1", "race1@x.com", "seeker");
+    const [a, b] = await Promise.all([
+      db.identity.createOrGetSeekerProfile(user.id, "Race A"),
+      db.identity.createOrGetSeekerProfile(user.id, "Race B"),
+    ]);
+    expect(a.record.id).toBe(b.record.id);
+  });
+
+  it("createOrGetSeekerProfile is idempotent across sequential calls, reporting created only the first time", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-idem-seeker", "idemseeker@x.com", "seeker");
+    const first = await db.identity.createOrGetSeekerProfile(user.id, "First Call");
+    const second = await db.identity.createOrGetSeekerProfile(user.id, "Second Call");
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.record.id).toBe(first.record.id);
+    expect(second.record.fullName).toBe("First Call");
+  });
+
+  it("gets a seeker profile by userId, and returns null when none exists", async () => {
+    const { db } = createFakeDatabase();
+    const user = await db.identity.findOrCreateUser("fb-gsbu-1", "gsbu1@x.com", "seeker");
+    expect(await db.identity.getSeekerProfileByUserId(user.id)).toBeNull();
+    const created = await db.identity.createOrGetSeekerProfile(user.id, "Lookup Me");
+    expect((await db.identity.getSeekerProfileByUserId(user.id))?.id).toBe(created.record.id);
+  });
+
+  it("gets an insider profile by userId, and returns null when none exists", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const user = await db.identity.findOrCreateUser("fb-gibu-1", "gibu1@acme.com", "seeker");
+    expect(await db.identity.getInsiderProfileByUserId(user.id)).toBeNull();
+    const created = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "gibu1@acme.com");
+    expect((await db.identity.getInsiderProfileByUserId(user.id))?.id).toBe(created.id);
+  });
+
+  it("storeWorkEmailOtp invalidates a prior unconsumed code for the same profile", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const user = await db.identity.findOrCreateUser("fb-inv-1", "inv1@acme.com", "insider");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "inv1@acme.com");
+    await db.identity.storeWorkEmailOtp(profile.id, "hash-old", new Date(Date.now() + 60_000));
+    await db.identity.storeWorkEmailOtp(profile.id, "hash-new", new Date(Date.now() + 60_000));
+
+    expect(await db.identity.consumeWorkEmailOtp(profile.id, "hash-old", new Date())).toBe(false);
+    expect(await db.identity.consumeWorkEmailOtp(profile.id, "hash-new", new Date())).toBe(true);
+  });
+
+  it("storeWorkEmailOtp does not error when the only prior code was already consumed", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const user = await db.identity.findOrCreateUser("fb-inv-2", "inv2@acme.com", "insider");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, company.id, "inv2@acme.com");
+    await db.identity.storeWorkEmailOtp(profile.id, "hash-a", new Date(Date.now() + 60_000));
+    await db.identity.consumeWorkEmailOtp(profile.id, "hash-a", new Date());
+    await db.identity.storeWorkEmailOtp(profile.id, "hash-b", new Date(Date.now() + 60_000));
+    expect(await db.identity.consumeWorkEmailOtp(profile.id, "hash-b", new Date())).toBe(true);
   });
 });
 

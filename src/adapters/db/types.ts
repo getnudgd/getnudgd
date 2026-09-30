@@ -305,6 +305,13 @@ export class RequestStateConflictError extends Error {
   }
 }
 
+export class InsiderProfileAlreadyVerifiedError extends Error {
+  constructor(insiderProfileId: string) {
+    super(`Insider profile ${insiderProfileId} is already verified — its company can no longer be changed`);
+    this.name = "InsiderProfileAlreadyVerifiedError";
+  }
+}
+
 export interface Database {
   ledger: {
     postTxn(input: PostLedgerTxnInput): Promise<LedgerTxnRecord>;
@@ -327,6 +334,9 @@ export interface Database {
     consumeWorkEmailOtp(insiderProfileId: string, codeHash: string, now: Date): Promise<boolean>;
     getInsiderProfileById(insiderProfileId: string): Promise<InsiderProfileRecord | null>;
     getSeekerProfileById(seekerProfileId: string): Promise<SeekerProfileRecord | null>;
+    getSeekerProfileByUserId(userId: string): Promise<SeekerProfileRecord | null>;
+    getInsiderProfileByUserId(userId: string): Promise<InsiderProfileRecord | null>;
+    createOrGetSeekerProfile(userId: string, fullName: string): Promise<{ record: SeekerProfileRecord; created: boolean }>;
     setUserRole(userId: string, role: Role): Promise<UserRecord>;
     setUserPhone(userId: string, phone: string): Promise<void>;
   };

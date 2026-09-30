@@ -48,6 +48,7 @@ import {
   RequestStateConflictError,
   InsufficientPointsError,
   RedemptionAlreadyResolvedError,
+  InsiderProfileAlreadyVerifiedError,
   assertSingleCurrency,
   assertValidTrancheInput,
 } from "./types";
@@ -292,13 +293,19 @@ export function createRealDatabase(db: NodePgDatabase): Database {
         return created as InsiderProfileRecord;
       },
       async updateInsiderProfileCompany(insiderProfileId, companyId, workEmail) {
+        // Guarded by verified_at IS NULL, not just the module-level check in startWorkEmailOtp:
+        // a concurrent verify landing between that check and this write must not silently move an
+        // already-verified profile to a different, unproven company.
         const [row] = await db
           .update(insiderProfiles)
           .set({ companyId, workEmail })
-          .where(eq(insiderProfiles.id, insiderProfileId))
+          .where(and(eq(insiderProfiles.id, insiderProfileId), isNull(insiderProfiles.verifiedAt)))
           .returning();
-        if (!row) throw new Error(`Insider profile ${insiderProfileId} not found`);
-        return row as InsiderProfileRecord;
+        if (row) return row as InsiderProfileRecord;
+
+        const [existing] = await db.select().from(insiderProfiles).where(eq(insiderProfiles.id, insiderProfileId));
+        if (!existing) throw new Error(`Insider profile ${insiderProfileId} not found`);
+        throw new InsiderProfileAlreadyVerifiedError(insiderProfileId);
       },
       async findCompanyByDomain(domain) {
         const [row] = await db
@@ -312,12 +319,22 @@ export function createRealDatabase(db: NodePgDatabase): Database {
         await db.update(insiderProfiles).set({ verifiedAt }).where(eq(insiderProfiles.id, insiderProfileId));
       },
       async storeWorkEmailOtp(insiderProfileId, codeHash, expiresAt) {
-        await db.insert(workEmailOtps).values({ insiderProfileId, codeHash, expiresAt });
+        await db.transaction(async (tx) => {
+          await tx
+            .update(workEmailOtps)
+            .set({ consumedAt: new Date() })
+            .where(and(eq(workEmailOtps.insiderProfileId, insiderProfileId), isNull(workEmailOtps.consumedAt)));
+          await tx.insert(workEmailOtps).values({ insiderProfileId, codeHash, expiresAt });
+        });
       },
       async consumeWorkEmailOtp(insiderProfileId, codeHash, now) {
+        // Single UPDATE ... WHERE ... RETURNING, not select-then-update: a code invalidated by a
+        // concurrent resend (storeWorkEmailOtp) between a select and a separate update could
+        // otherwise still be consumed here. The WHERE clause re-checks consumedAt IS NULL at the
+        // moment of the write itself, so a row is only returned if it was still valid then.
         const [otp] = await db
-          .select()
-          .from(workEmailOtps)
+          .update(workEmailOtps)
+          .set({ consumedAt: now })
           .where(
             and(
               eq(workEmailOtps.insiderProfileId, insiderProfileId),
@@ -325,10 +342,9 @@ export function createRealDatabase(db: NodePgDatabase): Database {
               isNull(workEmailOtps.consumedAt),
               gt(workEmailOtps.expiresAt, now)
             )
-          );
-        if (!otp) return false;
-        await db.update(workEmailOtps).set({ consumedAt: now }).where(eq(workEmailOtps.id, otp.id));
-        return true;
+          )
+          .returning();
+        return !!otp;
       },
       async getInsiderProfileById(insiderProfileId) {
         const [row] = await db.select().from(insiderProfiles).where(eq(insiderProfiles.id, insiderProfileId));
@@ -337,6 +353,27 @@ export function createRealDatabase(db: NodePgDatabase): Database {
       async getSeekerProfileById(seekerProfileId) {
         const [row] = await db.select().from(seekerProfiles).where(eq(seekerProfiles.id, seekerProfileId));
         return (row as SeekerProfileRecord) ?? null;
+      },
+      async getSeekerProfileByUserId(userId) {
+        const [row] = await db.select().from(seekerProfiles).where(eq(seekerProfiles.userId, userId));
+        return (row as SeekerProfileRecord) ?? null;
+      },
+      async getInsiderProfileByUserId(userId) {
+        const [row] = await db.select().from(insiderProfiles).where(eq(insiderProfiles.userId, userId));
+        return (row as InsiderProfileRecord) ?? null;
+      },
+      async createOrGetSeekerProfile(userId, fullName) {
+        const [inserted] = await db
+          .insert(seekerProfiles)
+          .values({ userId, fullName })
+          .onConflictDoNothing({ target: seekerProfiles.userId })
+          .returning();
+        if (inserted) return { record: inserted as SeekerProfileRecord, created: true };
+        const [existing] = await db.select().from(seekerProfiles).where(eq(seekerProfiles.userId, userId));
+        if (!existing) {
+          throw new Error(`Seeker profile for user ${userId} vanished after a conflict`);
+        }
+        return { record: existing as SeekerProfileRecord, created: false };
       },
       async setUserRole(userId, role) {
         const [row] = await db.update(users).set({ role }).where(eq(users.id, userId)).returning();

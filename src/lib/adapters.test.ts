@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { resetEnvCacheForTests } from "../config/env";
 import { getAdapters, resetAdaptersCacheForTests } from "./adapters";
+import { InvalidTokenError } from "../adapters/auth/types";
 
 const REQUIRED_ENV = {
   APP_URL: "http://localhost:3000",
@@ -52,13 +56,36 @@ describe("getAdapters", () => {
     expect(adapters.queue).toBeDefined();
   });
 
-  it("always uses fake auth, storage, and email regardless of ADAPTERS, since no real implementation exists yet", () => {
+  it("always uses fake storage and email regardless of ADAPTERS, since no real implementation exists yet", () => {
     process.env.ADAPTERS = "real";
     resetEnvCacheForTests();
     const adapters = getAdapters();
-    expect(adapters.auth).toBeDefined();
     expect(adapters.storage).toBeDefined();
     expect(adapters.email).toBeDefined();
+  });
+
+  it("uses the fake auth adapter outside production, regardless of ADAPTERS", async () => {
+    process.env.ADAPTERS = "real";
+    resetEnvCacheForTests();
+    const adapters = getAdapters();
+    const token = Buffer.from(JSON.stringify({ providerUid: "fb-1", email: "a@b.com" })).toString("base64url");
+    await expect(adapters.auth.verifyIdToken(token)).resolves.toEqual({ providerUid: "fb-1", email: "a@b.com" });
+  });
+
+  it("uses the fake auth adapter when NODE_ENV=test, not the production-refusing one", async () => {
+    process.env = { ...process.env, NODE_ENV: "test" };
+    resetEnvCacheForTests();
+    const adapters = getAdapters();
+    const token = Buffer.from(JSON.stringify({ providerUid: "fb-1", email: "a@b.com" })).toString("base64url");
+    await expect(adapters.auth.verifyIdToken(token)).resolves.toEqual({ providerUid: "fb-1", email: "a@b.com" });
+  });
+
+  it("rejects every token in production, including an otherwise-valid fake token", async () => {
+    process.env = { ...process.env, NODE_ENV: "production" };
+    resetEnvCacheForTests();
+    const adapters = getAdapters();
+    const token = Buffer.from(JSON.stringify({ providerUid: "fb-1", email: "a@b.com" })).toString("base64url");
+    await expect(adapters.auth.verifyIdToken(token)).rejects.toThrow(InvalidTokenError);
   });
 
   it("memoizes: repeated calls return the same instance", () => {
@@ -72,5 +99,22 @@ describe("getAdapters", () => {
     resetAdaptersCacheForTests();
     const second = getAdapters();
     expect(second).not.toBe(first);
+  });
+
+  it("uses the file mailbox sender when DEV_MAILBOX_PATH is set outside production", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "gn-mailbox-adapters-"));
+    const filePath = path.join(dir, "mailbox.jsonl");
+    process.env.DEV_MAILBOX_PATH = filePath;
+    resetEnvCacheForTests();
+    const adapters = getAdapters();
+    await adapters.email.send({ to: "a@b.com", subject: "Hi", html: "<p>hi</p>" });
+    expect(readFileSync(filePath, "utf8")).toContain("a@b.com");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("uses the plain fake sender when DEV_MAILBOX_PATH is unset", async () => {
+    const adapters = getAdapters();
+    const result = await adapters.email.send({ to: "a@b.com", subject: "Hi", html: "<p>hi</p>" });
+    expect(result.id).toMatch(/^fake-email-/);
   });
 });

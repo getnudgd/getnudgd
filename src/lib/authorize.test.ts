@@ -34,4 +34,10 @@ describe("authorize", () => {
   it("denies a user reading someone else's resume", () => {
     expect(authorize(seekerSession, "read", { type: "resume", ownerUserId: "u2" })).toBe(false);
   });
+
+  it("accepts a narrower { userId, role } shape sourced from a CurrentUser, without issuedAt", () => {
+    expect(authorize({ userId: "u1", role: "seeker" }, "read", { type: "seekerProfile", ownerUserId: "u1" })).toBe(
+      true
+    );
+  });
 });
