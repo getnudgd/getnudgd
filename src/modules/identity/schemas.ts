@@ -16,3 +16,21 @@ export const verifyWorkEmailOtpInputSchema = z.object({
   insiderProfileId: z.string().uuid(),
   code: z.string().length(6),
 });
+
+export const createOrGetSeekerProfileInputSchema = z.object({
+  fullName: z.string().min(1),
+});
+
+export const requestWorkEmailOtpInputSchema = z.object({
+  fullName: z.string().min(1),
+  workEmail: z.string().email(),
+});
+
+export const verifyWorkEmailOtpForUserInputSchema = z.object({
+  code: z.string().length(6),
+});
+
+export const devLoginInputSchema = z.object({
+  email: z.string().email(),
+  code: z.string().length(6),
+});

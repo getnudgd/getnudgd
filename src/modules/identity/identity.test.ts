@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createFakeDatabase } from "../../adapters/db/fake";
 import { createFakeAuthAdapter } from "../../adapters/auth/fake";
+import { createFakeEmailSender } from "../../adapters/email/fake";
 import {
   signInWithFirebaseToken,
   startWorkEmailOtp,
@@ -13,6 +14,10 @@ import {
   canAccessAdmin,
   canAccessSeekerApp,
   canAccessInsiderApp,
+  createOrGetSeekerProfile,
+  requestWorkEmailOtp,
+  resendWorkEmailOtp,
+  verifyWorkEmailOtpForUser,
   type IdentityDeps,
 } from "./identity";
 
@@ -316,5 +321,117 @@ describe("canAccessAdmin / canAccessSeekerApp / canAccessInsiderApp", () => {
       false
     );
     expect(canAccessInsiderApp({ ...base, role: "insider" })).toBe(false);
+  });
+});
+
+describe("createOrGetSeekerProfile (module wrapper)", () => {
+  it("creates a profile and returns the same one on repeated calls", async () => {
+    const { deps } = makeDeps();
+    const user = await deps.db.identity.findOrCreateUser("fb-cogsp-1", "cogsp1@x.com", "seeker");
+    const first = await createOrGetSeekerProfile(deps, user.id, "First Name");
+    const second = await createOrGetSeekerProfile(deps, user.id, "Second Name");
+    expect(second.id).toBe(first.id);
+    expect(second.fullName).toBe("First Name");
+  });
+});
+
+describe("requestWorkEmailOtp", () => {
+  it("sends an email containing a 6-digit code and the brand name in the subject", async () => {
+    const { deps, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const { sender, sent } = createFakeEmailSender();
+
+    await requestWorkEmailOtp({ db: deps.db, email: sender }, "user-1", "person@acme.com");
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].to).toBe("person@acme.com");
+    expect(sent[0].subject).toContain("GetNudgd");
+    expect(sent[0].html).toMatch(/\d{6}/);
+  });
+
+  it("never returns the code itself, only the insiderProfileId", async () => {
+    const { deps, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const { sender } = createFakeEmailSender();
+
+    const result = await requestWorkEmailOtp({ db: deps.db, email: sender }, "user-1", "person@acme.com");
+    expect(Object.keys(result)).toEqual(["insiderProfileId"]);
+  });
+
+  it("invalidates the first email's OTP when called again with a different work email", async () => {
+    const { deps, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    seedCompany({ name: "Beta", tier: "tier2" }, ["beta.com"]);
+    const { sender, sent } = createFakeEmailSender();
+
+    await requestWorkEmailOtp({ db: deps.db, email: sender }, "user-1", "person@acme.com");
+    const firstCode = sent[0].html.match(/\d{6}/)?.[0];
+    await requestWorkEmailOtp({ db: deps.db, email: sender }, "user-1", "person@beta.com");
+    const secondCode = sent[1].html.match(/\d{6}/)?.[0];
+
+    expect(await verifyWorkEmailOtpForUser({ db: deps.db }, "user-1", firstCode!)).toBe(false);
+    expect(await verifyWorkEmailOtpForUser({ db: deps.db }, "user-1", secondCode!)).toBe(true);
+  });
+});
+
+describe("resendWorkEmailOtp", () => {
+  it("resends to the Insider profile's already-stored work email, without the caller supplying it again", async () => {
+    const { deps, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const { sender, sent } = createFakeEmailSender();
+
+    await requestWorkEmailOtp({ db: deps.db, email: sender }, "user-1", "person@acme.com");
+    const result = await resendWorkEmailOtp({ db: deps.db, email: sender }, "user-1");
+
+    expect(result?.insiderProfileId).toBeTruthy();
+    expect(sent).toHaveLength(2);
+    expect(sent[1].to).toBe("person@acme.com");
+  });
+
+  it("invalidates the previous code on resend", async () => {
+    const { deps, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const { sender, sent } = createFakeEmailSender();
+
+    await requestWorkEmailOtp({ db: deps.db, email: sender }, "user-1", "person@acme.com");
+    const firstCode = sent[0].html.match(/\d{6}/)![0];
+    await resendWorkEmailOtp({ db: deps.db, email: sender }, "user-1");
+    const secondCode = sent[1].html.match(/\d{6}/)![0];
+
+    expect(await verifyWorkEmailOtpForUser({ db: deps.db }, "user-1", firstCode)).toBe(false);
+    expect(await verifyWorkEmailOtpForUser({ db: deps.db }, "user-1", secondCode)).toBe(true);
+  });
+
+  it("returns null when the user has no Insider profile at all", async () => {
+    const { deps } = makeDeps();
+    const { sender } = createFakeEmailSender();
+    expect(await resendWorkEmailOtp({ db: deps.db, email: sender }, "user-with-no-profile")).toBeNull();
+  });
+});
+
+describe("verifyWorkEmailOtpForUser", () => {
+  it("verifies using the caller's own userId, never a caller-supplied profile id", async () => {
+    const { deps, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const { sender, sent } = createFakeEmailSender();
+
+    await requestWorkEmailOtp({ db: deps.db, email: sender }, "user-1", "person@acme.com");
+    const code = sent[0].html.match(/\d{6}/)![0];
+
+    expect(await verifyWorkEmailOtpForUser({ db: deps.db }, "user-1", code)).toBe(true);
+  });
+
+  it("returns false when the user has no Insider profile at all", async () => {
+    const { deps } = makeDeps();
+    expect(await verifyWorkEmailOtpForUser({ db: deps.db }, "user-with-no-profile", "000000")).toBe(false);
+  });
+
+  it("returns false for a wrong code", async () => {
+    const { deps, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const { sender } = createFakeEmailSender();
+
+    await requestWorkEmailOtp({ db: deps.db, email: sender }, "user-1", "person@acme.com");
+    expect(await verifyWorkEmailOtpForUser({ db: deps.db }, "user-1", "000000")).toBe(false);
   });
 });

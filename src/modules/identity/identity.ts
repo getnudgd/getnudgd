@@ -1,6 +1,8 @@
 import { createHash, randomInt } from "node:crypto";
-import type { Database, Role } from "../../adapters/db/types";
+import type { Database, Role, SeekerProfileRecord } from "../../adapters/db/types";
 import type { AuthAdapter } from "../../adapters/auth/types";
+import type { EmailSender } from "../../adapters/email/types";
+import { brand } from "../../config/brand";
 
 export interface IdentityDeps {
   db: Database;
@@ -61,7 +63,7 @@ export interface StartWorkEmailOtpResult {
 }
 
 export async function startWorkEmailOtp(
-  deps: IdentityDeps,
+  deps: Pick<IdentityDeps, "db">,
   userId: string,
   workEmail: string
 ): Promise<StartWorkEmailOtpResult> {
@@ -84,7 +86,7 @@ export async function startWorkEmailOtp(
   return { insiderProfileId: profile.id, code };
 }
 
-export async function verifyWorkEmailOtp(deps: IdentityDeps, insiderProfileId: string, code: string): Promise<boolean> {
+export async function verifyWorkEmailOtp(deps: Pick<IdentityDeps, "db">, insiderProfileId: string, code: string): Promise<boolean> {
   const valid = await deps.db.identity.consumeWorkEmailOtp(insiderProfileId, hashOtpCode(code), new Date());
   if (!valid) return false;
 
@@ -136,4 +138,46 @@ export function canAccessSeekerApp(user: CurrentUser): boolean {
 
 export function canAccessInsiderApp(user: CurrentUser): boolean {
   return user.insiderProfile !== null && user.insiderProfile.verifiedAt !== null;
+}
+
+export async function createOrGetSeekerProfile(
+  deps: Pick<IdentityDeps, "db">,
+  userId: string,
+  fullName: string
+): Promise<SeekerProfileRecord> {
+  const { record } = await deps.db.identity.createOrGetSeekerProfile(userId, fullName);
+  return record;
+}
+
+export async function requestWorkEmailOtp(
+  deps: Pick<IdentityDeps, "db"> & { email: EmailSender },
+  userId: string,
+  workEmail: string
+): Promise<{ insiderProfileId: string }> {
+  const { insiderProfileId, code } = await startWorkEmailOtp(deps, userId, workEmail);
+  await deps.email.send({
+    to: workEmail,
+    subject: `Your ${brand.name} work-email code`,
+    html: `<p>Your verification code is <strong>${code}</strong>. It expires in 10 minutes.</p>`,
+  });
+  return { insiderProfileId };
+}
+
+export async function resendWorkEmailOtp(
+  deps: Pick<IdentityDeps, "db"> & { email: EmailSender },
+  userId: string
+): Promise<{ insiderProfileId: string } | null> {
+  const profile = await deps.db.identity.getInsiderProfileByUserId(userId);
+  if (!profile) return null;
+  return requestWorkEmailOtp(deps, userId, profile.workEmail);
+}
+
+export async function verifyWorkEmailOtpForUser(
+  deps: Pick<IdentityDeps, "db">,
+  userId: string,
+  code: string
+): Promise<boolean> {
+  const profile = await deps.db.identity.getInsiderProfileByUserId(userId);
+  if (!profile) return false;
+  return verifyWorkEmailOtp(deps, profile.id, code);
 }
