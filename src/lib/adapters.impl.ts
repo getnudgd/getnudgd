@@ -9,6 +9,7 @@ import { createFakeQueueClient } from "../jobs/queue.fake";
 import { createRealQueueClient } from "../jobs/queue.real";
 import type { AuthAdapter } from "../adapters/auth/types";
 import { createFakeAuthAdapter } from "../adapters/auth/fake";
+import { createRefusingAuthAdapter } from "../adapters/auth/refusing";
 import type { StorageAdapter } from "../adapters/storage/types";
 import { createFakeStorageAdapter } from "../adapters/storage/fake";
 import type { EmailSender } from "../adapters/email/types";
@@ -34,8 +35,11 @@ let cached: Adapters | undefined;
  * The single place the app picks fake vs. real adapters, based on env.ADAPTERS.
  * auth/storage/email/whatsapp have no real.ts implementation yet (Firebase, Cloud Storage,
  * and Brevo are deferred; WhatsAppGateway has only a fake in this plan) — they
- * always use fakes until those land, regardless
- * of ADAPTERS. giftCards always uses the manual fulfilment vendor (the founder
+ * always use fakes until those land, regardless of ADAPTERS, with one
+ * exception: auth uses a refusing adapter (src/adapters/auth/refusing.ts)
+ * whenever NODE_ENV=production, so a production deployment can never accept
+ * the fake adapter's forged tokens even before a real Firebase adapter exists.
+ * giftCards always uses the manual fulfilment vendor (the founder
  * fulfils redemptions by hand from `/admin`); there is no fake/real split for
  * it yet since there is no third-party gift-card vendor integrated. Memoized:
  * the underlying Pool/QueueClient are constructed once and reused across calls
@@ -61,7 +65,8 @@ export function getAdapters(): Adapters {
   const queue: QueueClient =
     env.ADAPTERS === "real" ? createRealQueueClient(env.DATABASE_URL) : createFakeQueueClient();
 
-  const auth: AuthAdapter = createFakeAuthAdapter().adapter;
+  const auth: AuthAdapter =
+    env.NODE_ENV === "production" ? createRefusingAuthAdapter().adapter : createFakeAuthAdapter().adapter;
   const storage: StorageAdapter = createFakeStorageAdapter();
   const email: EmailSender = createFakeEmailSender().sender;
 
