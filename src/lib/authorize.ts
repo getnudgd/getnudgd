@@ -8,7 +8,7 @@ export interface Resource {
   ownerUserId: string;
 }
 
-export function authorize(session: SessionPayload | null, _action: Action, resource: Resource): boolean {
+export function authorize(session: Pick<SessionPayload, "userId" | "role"> | null, _action: Action, resource: Resource): boolean {
   if (!session) return false;
   if (session.role === "admin") return true;
   return session.userId === resource.ownerUserId;
