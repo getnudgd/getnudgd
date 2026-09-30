@@ -8,6 +8,11 @@ import {
   promoteRoleForInsiderVerification,
   WorkEmailDomainError,
   InsiderCompanyChangeError,
+  getCurrentUserFromDb,
+  resolveLanding,
+  canAccessAdmin,
+  canAccessSeekerApp,
+  canAccessInsiderApp,
   type IdentityDeps,
 } from "./identity";
 
@@ -199,5 +204,117 @@ describe("startWorkEmailOtp company-change handling", () => {
     await verifyWorkEmailOtp(deps, insiderProfileId, code);
 
     await expect(startWorkEmailOtp(deps, session.userId, "person@beta.com")).rejects.toThrow(InsiderCompanyChangeError);
+  });
+});
+
+describe("getCurrentUserFromDb", () => {
+  it("returns null when the user doesn't exist", async () => {
+    const { deps } = makeDeps();
+    expect(await getCurrentUserFromDb(deps, "nonexistent")).toBeNull();
+  });
+
+  it("returns a CurrentUser with null profiles for a brand-new user", async () => {
+    const { deps } = makeDeps();
+    const user = await deps.db.identity.findOrCreateUser("fb-cu-1", "cu1@x.com", "seeker");
+    expect(await getCurrentUserFromDb(deps, user.id)).toEqual({
+      userId: user.id,
+      role: "seeker",
+      seekerProfileId: null,
+      insiderProfile: null,
+    });
+  });
+
+  it("includes the seeker profile id once one exists", async () => {
+    const { deps } = makeDeps();
+    const user = await deps.db.identity.findOrCreateUser("fb-cu-2", "cu2@x.com", "seeker");
+    const { record } = await deps.db.identity.createOrGetSeekerProfile(user.id, "CU Two");
+    const currentUser = await getCurrentUserFromDb(deps, user.id);
+    expect(currentUser?.seekerProfileId).toBe(record.id);
+  });
+
+  it("includes the insider profile with verifiedAt once one exists", async () => {
+    const { deps, seedCompany } = makeDeps();
+    const company = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const user = await deps.db.identity.findOrCreateUser("fb-cu-3", "cu3@acme.com", "seeker");
+    const profile = await deps.db.identity.findOrCreateInsiderProfile(user.id, company.id, "cu3@acme.com");
+    const currentUser = await getCurrentUserFromDb(deps, user.id);
+    expect(currentUser?.insiderProfile).toEqual({ id: profile.id, verifiedAt: null });
+  });
+});
+
+describe("resolveLanding", () => {
+  const base = { userId: "u1", seekerProfileId: null, insiderProfile: null } as const;
+
+  it("sends an admin to /admin regardless of profiles", () => {
+    expect(resolveLanding({ ...base, role: "admin", seekerProfileId: "sp1" })).toBe("/admin");
+  });
+
+  it("sends a user with a Seeker profile to /seeker/dashboard", () => {
+    expect(resolveLanding({ ...base, role: "seeker", seekerProfileId: "sp1" })).toBe("/seeker/dashboard");
+  });
+
+  it("sends a both-role user with a Seeker profile AND a verified Insider profile to /seeker/dashboard, not /insider/dashboard", () => {
+    expect(
+      resolveLanding({
+        ...base,
+        role: "both",
+        seekerProfileId: "sp1",
+        insiderProfile: { id: "ip1", verifiedAt: new Date() },
+      })
+    ).toBe("/seeker/dashboard");
+  });
+
+  it("sends a verified Insider with no Seeker profile to /insider/dashboard", () => {
+    expect(
+      resolveLanding({ ...base, role: "insider", insiderProfile: { id: "ip1", verifiedAt: new Date() } })
+    ).toBe("/insider/dashboard");
+  });
+
+  it("sends an unverified Insider with no Seeker profile to /onboard", () => {
+    expect(resolveLanding({ ...base, role: "insider", insiderProfile: { id: "ip1", verifiedAt: null } })).toBe(
+      "/onboard"
+    );
+  });
+
+  it("sends a user with no profiles at all to /onboard", () => {
+    expect(resolveLanding({ ...base, role: "seeker" })).toBe("/onboard");
+  });
+
+  it("never traps a Seeker who abandoned adding the Insider role: a Seeker profile plus an unverified Insider profile still lands on /seeker/dashboard", () => {
+    expect(
+      resolveLanding({
+        ...base,
+        role: "both",
+        seekerProfileId: "sp1",
+        insiderProfile: { id: "ip1", verifiedAt: null },
+      })
+    ).toBe("/seeker/dashboard");
+  });
+});
+
+describe("canAccessAdmin / canAccessSeekerApp / canAccessInsiderApp", () => {
+  const base = { userId: "u1", seekerProfileId: null, insiderProfile: null } as const;
+
+  it("canAccessAdmin is true only for role=admin", () => {
+    expect(canAccessAdmin({ ...base, role: "admin" })).toBe(true);
+    expect(canAccessAdmin({ ...base, role: "both" })).toBe(false);
+    expect(canAccessAdmin({ ...base, role: "seeker" })).toBe(false);
+  });
+
+  it("canAccessSeekerApp is true iff a Seeker profile exists, regardless of role", () => {
+    expect(canAccessSeekerApp({ ...base, role: "seeker", seekerProfileId: "sp1" })).toBe(true);
+    expect(canAccessSeekerApp({ ...base, role: "both", seekerProfileId: "sp1" })).toBe(true);
+    expect(canAccessSeekerApp({ ...base, role: "seeker" })).toBe(false);
+    expect(canAccessSeekerApp({ ...base, role: "admin" })).toBe(false);
+  });
+
+  it("canAccessInsiderApp is true iff an Insider profile exists AND is verified", () => {
+    expect(canAccessInsiderApp({ ...base, role: "insider", insiderProfile: { id: "ip1", verifiedAt: new Date() } })).toBe(
+      true
+    );
+    expect(canAccessInsiderApp({ ...base, role: "insider", insiderProfile: { id: "ip1", verifiedAt: null } })).toBe(
+      false
+    );
+    expect(canAccessInsiderApp({ ...base, role: "insider" })).toBe(false);
   });
 });
