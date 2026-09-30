@@ -890,6 +890,7 @@ git commit -m "feat(identity): add CurrentUser, getCurrentUserFromDb, resolveLan
   - `startWorkEmailOtp(deps: Pick<IdentityDeps, "db">, ...)` and `verifyWorkEmailOtp(deps: Pick<IdentityDeps, "db">, ...)` — same names/behavior, narrower `deps` type. Every existing caller (both pass a full `IdentityDeps`) keeps compiling unchanged.
   - `createOrGetSeekerProfile(deps: Pick<IdentityDeps, "db">, userId: string, fullName: string): Promise<SeekerProfileRecord>`
   - `requestWorkEmailOtp(deps: Pick<IdentityDeps, "db"> & { email: EmailSender }, userId: string, workEmail: string): Promise<{ insiderProfileId: string }>`
+  - `resendWorkEmailOtp(deps: Pick<IdentityDeps, "db"> & { email: EmailSender }, userId: string): Promise<{ insiderProfileId: string } | null>` — resends to the Insider profile's already-stored `workEmail`, so Plan B's "Resend code" button on the resumed-OTP screen (spec §4.9 row 1) never needs the Seeker/Insider name+email form fields to be filled in again on a fresh page load. Returns `null` only if the user has no Insider profile at all (defensive; the UI never calls this except from the OTP step, where one always exists).
   - `verifyWorkEmailOtpForUser(deps: Pick<IdentityDeps, "db">, userId: string, code: string): Promise<boolean>`
   - `createOrGetSeekerProfileInputSchema`, `requestWorkEmailOtpInputSchema`, `verifyWorkEmailOtpForUserInputSchema`, `devLoginInputSchema` in `schemas.ts`, for Plan B's server actions to import.
 
@@ -906,6 +907,7 @@ Add these names to the existing `import { ... } from "./identity";` block:
 ```ts
   createOrGetSeekerProfile,
   requestWorkEmailOtp,
+  resendWorkEmailOtp,
   verifyWorkEmailOtpForUser,
 ```
 
@@ -962,6 +964,41 @@ describe("requestWorkEmailOtp", () => {
   });
 });
 
+describe("resendWorkEmailOtp", () => {
+  it("resends to the Insider profile's already-stored work email, without the caller supplying it again", async () => {
+    const { deps, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const { sender, sent } = createFakeEmailSender();
+
+    await requestWorkEmailOtp({ db: deps.db, email: sender }, "user-1", "person@acme.com");
+    const result = await resendWorkEmailOtp({ db: deps.db, email: sender }, "user-1");
+
+    expect(result?.insiderProfileId).toBeTruthy();
+    expect(sent).toHaveLength(2);
+    expect(sent[1].to).toBe("person@acme.com");
+  });
+
+  it("invalidates the previous code on resend", async () => {
+    const { deps, seedCompany } = makeDeps();
+    seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const { sender, sent } = createFakeEmailSender();
+
+    await requestWorkEmailOtp({ db: deps.db, email: sender }, "user-1", "person@acme.com");
+    const firstCode = sent[0].html.match(/\d{6}/)![0];
+    await resendWorkEmailOtp({ db: deps.db, email: sender }, "user-1");
+    const secondCode = sent[1].html.match(/\d{6}/)![0];
+
+    expect(await verifyWorkEmailOtpForUser({ db: deps.db }, "user-1", firstCode)).toBe(false);
+    expect(await verifyWorkEmailOtpForUser({ db: deps.db }, "user-1", secondCode)).toBe(true);
+  });
+
+  it("returns null when the user has no Insider profile at all", async () => {
+    const { deps } = makeDeps();
+    const { sender } = createFakeEmailSender();
+    expect(await resendWorkEmailOtp({ db: deps.db, email: sender }, "user-with-no-profile")).toBeNull();
+  });
+});
+
 describe("verifyWorkEmailOtpForUser", () => {
   it("verifies using the caller's own userId, never a caller-supplied profile id", async () => {
     const { deps, seedCompany } = makeDeps();
@@ -969,7 +1006,7 @@ describe("verifyWorkEmailOtpForUser", () => {
     const { sender, sent } = createFakeEmailSender();
 
     await requestWorkEmailOtp({ db: deps.db, email: sender }, "user-1", "person@acme.com");
-    const code = sent[0].html.match(/\d{6}/)?.[0]!;
+    const code = sent[0].html.match(/\d{6}/)![0];
 
     expect(await verifyWorkEmailOtpForUser({ db: deps.db }, "user-1", code)).toBe(true);
   });
@@ -993,7 +1030,7 @@ describe("verifyWorkEmailOtpForUser", () => {
 - [ ] **Step 2: Run and verify the tests fail**
 
 Run: `npx vitest run src/modules/identity/identity.test.ts`
-Expected: FAIL — `createOrGetSeekerProfile`, `requestWorkEmailOtp`, `verifyWorkEmailOtpForUser` are not exported by `./identity`.
+Expected: FAIL — `createOrGetSeekerProfile`, `requestWorkEmailOtp`, `resendWorkEmailOtp`, `verifyWorkEmailOtpForUser` are not exported by `./identity`.
 
 - [ ] **Step 3: Narrow `startWorkEmailOtp` and `verifyWorkEmailOtp`, and add the three new functions**
 
@@ -1070,6 +1107,15 @@ export async function requestWorkEmailOtp(
   return { insiderProfileId };
 }
 
+export async function resendWorkEmailOtp(
+  deps: Pick<IdentityDeps, "db"> & { email: EmailSender },
+  userId: string
+): Promise<{ insiderProfileId: string } | null> {
+  const profile = await deps.db.identity.getInsiderProfileByUserId(userId);
+  if (!profile) return null;
+  return requestWorkEmailOtp(deps, userId, profile.workEmail);
+}
+
 export async function verifyWorkEmailOtpForUser(
   deps: Pick<IdentityDeps, "db">,
   userId: string,
@@ -1126,7 +1172,7 @@ Expected: all tests pass (no regressions from the signature narrowing).
 
 ```bash
 git add src/modules/identity/identity.ts src/modules/identity/identity.test.ts src/modules/identity/schemas.ts
-git commit -m "feat(identity): add createOrGetSeekerProfile, requestWorkEmailOtp, verifyWorkEmailOtpForUser, and narrow OTP deps to {db}"
+git commit -m "feat(identity): add createOrGetSeekerProfile, requestWorkEmailOtp, resendWorkEmailOtp, verifyWorkEmailOtpForUser, and narrow OTP deps to {db}"
 ```
 
 ---

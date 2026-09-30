@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-30-auth-onboarding-design.md` (read in full; this plan implements its §4.7–§4.9, §4.10's layout wiring, §4.12, and §5's Plan B testing).
 
-**Depends on:** `docs/superpowers/plans/2026-09-30-auth-onboarding-plan-a-backend.md`, merged first. Every import below assumes Plan A's exports already exist: `getCurrentUser` (`src/lib/current-user.ts`), `resolveLanding`/`canAccessAdmin`/`canAccessSeekerApp`/`canAccessInsiderApp`/`createOrGetSeekerProfile`/`requestWorkEmailOtp`/`verifyWorkEmailOtpForUser`/`getCurrentUserFromDb` (`src/modules/identity/identity.ts`), `problem`/`mapErrorToProblem` (`src/lib/problems.ts`), `devLoginLimiter`/`otpSendLimiter`/`otpVerifyLimiter`/`limiterKey` (`src/lib/limiters.ts`), the four schema exports in `src/modules/identity/schemas.ts`, `getAdapters` (`src/lib/adapters.ts`), `authorize` (`src/lib/authorize.ts`).
+**Depends on:** `docs/superpowers/plans/2026-09-30-auth-onboarding-plan-a-backend.md`, merged first. Every import below assumes Plan A's exports already exist: `getCurrentUser` (`src/lib/current-user.ts`), `resolveLanding`/`canAccessAdmin`/`canAccessSeekerApp`/`canAccessInsiderApp`/`createOrGetSeekerProfile`/`requestWorkEmailOtp`/`resendWorkEmailOtp`/`verifyWorkEmailOtpForUser`/`getCurrentUserFromDb` (`src/modules/identity/identity.ts`), `problem`/`mapErrorToProblem` (`src/lib/problems.ts`), `devLoginLimiter`/`otpSendLimiter`/`otpVerifyLimiter`/`limiterKey` (`src/lib/limiters.ts`), the four schema exports in `src/modules/identity/schemas.ts`, `getAdapters` (`src/lib/adapters.ts`), `authorize` (`src/lib/authorize.ts`).
 
 ## Global Constraints
 
@@ -28,7 +28,8 @@
 - A user with BOTH a Seeker profile and an unverified Insider profile visits `/onboard` directly with no `add` param. Per the spec's corrected `resolveLanding`, this user is "fully onboarded" (lands on `/seeker/dashboard`) — but `/onboard`'s own row 1 (resume the unverified-Insider OTP step) must still win, since it is checked before the "redirect away" row. Covered by Task 2's `step.test.ts`.
 - A signed-in user with an *unverified* Insider profile navigates to `/insider/*`. The layout must redirect to `/onboard` (bare, no `add` param, since the profile already exists and only needs its OTP step resumed) — not `/onboard?add=insider` (which would be silently ignored anyway, but sending the wrong URL is still a defect). Covered by Task 3's insider layout test.
 - The dev-login rate limiter must count *failed* attempts (wrong code), not only successful ones — otherwise an attacker gets unlimited guesses by never succeeding. Covered by Task 1's `actions.test.ts`.
-- `verifyInsiderOtpAction`'s post-verification redirect must reflect the state *just* written by this same request (the Insider profile's `verifiedAt`), not a stale value from `getCurrentUser()`'s per-request cache captured earlier in the same action. Covered by Task 2's `actions.test.ts`.
+- `verifyInsiderOtpAction`'s post-verification redirect must land a just-verified Insider on `/insider/dashboard` even when they also have a Seeker profile (the common `?add=insider` path: a Seeker adding the Insider role). Redirecting via `resolveLanding` instead of a fixed `/insider/dashboard` would silently send this exact user back to `/seeker/dashboard`, since `resolveLanding` prioritizes an existing Seeker profile. Covered by Task 2's `actions.test.ts` with a both-role case.
+- The "Resend code" button on the resumed-OTP screen (spec §4.9 row 1 — a page reload mid-flow, so no client-side `workEmail`/`fullName` state survives) must still work: it cannot depend on form fields the user never re-filled. Covered by Task 2's `actions.test.ts` for `resendInsiderOtpAction` and `OnboardFlow.test.tsx`'s "resend from a resumed state" case.
 - `/login` and `/onboard` must return a real 404 (via `notFound()`), not a blank or broken page, when `DEV_LOGIN_ENABLED` is false — so a real deployment never reveals these routes exist. Covered by Task 1's `page.test.tsx` for `/login`; `/onboard`'s own gate is session-based (redirect to `/login`), documented and tested in Task 2.
 
 ---
@@ -416,14 +417,16 @@ describe("LoginPage", () => {
   it("calls notFound() when DEV_LOGIN_ENABLED is false", () => {
     process.env.DEV_LOGIN_ENABLED = "false";
     resetEnvCacheForTests();
-    expect(() => render(<LoginPage />)).toThrow("NOT_FOUND");
+    // Calling the (plain, synchronous) component function directly rather than through
+    // render() — more robust than relying on React 19's act() rethrowing a render error.
+    expect(() => LoginPage()).toThrow("NOT_FOUND");
   });
 
   it("calls notFound() in production regardless of DEV_LOGIN_ENABLED (defense in depth on top of Plan A's getEnv() refusal, which already makes this combination unreachable in a real deployment)", () => {
     process.env.NODE_ENV = "production";
     process.env.DEV_LOGIN_ENABLED = "false";
     resetEnvCacheForTests();
-    expect(() => render(<LoginPage />)).toThrow("NOT_FOUND");
+    expect(() => LoginPage()).toThrow("NOT_FOUND");
   });
 });
 ```
@@ -477,8 +480,8 @@ git commit -m "feat(login): add dev sign-in page, two-step form, and devLoginAct
 - Create: `app/(public)/onboard/page.tsx`
 
 **Interfaces:**
-- Consumes: `getCurrentUser` (`@/src/lib/current-user`), `resolveLanding`, `getCurrentUserFromDb`, `createOrGetSeekerProfile`, `requestWorkEmailOtp`, `verifyWorkEmailOtpForUser` (`@/src/modules/identity/identity`), `createOrGetSeekerProfileInputSchema`/`requestWorkEmailOtpInputSchema`/`verifyWorkEmailOtpForUserInputSchema` (`@/src/modules/identity/schemas`), `getAdapters` (`@/src/lib/adapters`), `authorize` (`@/src/lib/authorize`), `otpSendLimiter`/`otpVerifyLimiter`/`limiterKey` (`@/src/lib/limiters`), `problem`/`mapErrorToProblem`/`type Problem` (`@/src/lib/problems`).
-- Produces: `resolveStartingStep(user, add): "otp" | "seeker-name" | "insider-name-email" | "role-choice" | null` (pure — `null` means "fully onboarded, redirect away per `resolveLanding`"). `createSeekerProfileAction`, `requestInsiderOtpAction`, `verifyInsiderOtpAction`, each `(input) => Promise<{ ok: true } | { ok: false; problem: Problem }>`.
+- Consumes: `getCurrentUser` (`@/src/lib/current-user`), `getCurrentUserFromDb`, `createOrGetSeekerProfile`, `requestWorkEmailOtp`, `resendWorkEmailOtp`, `verifyWorkEmailOtpForUser` (`@/src/modules/identity/identity`), `createOrGetSeekerProfileInputSchema`/`requestWorkEmailOtpInputSchema`/`verifyWorkEmailOtpForUserInputSchema` (`@/src/modules/identity/schemas`), `getAdapters` (`@/src/lib/adapters`), `authorize` (`@/src/lib/authorize`), `otpSendLimiter`/`otpVerifyLimiter`/`limiterKey` (`@/src/lib/limiters`), `problem`/`mapErrorToProblem`/`type Problem` (`@/src/lib/problems`).
+- Produces: `resolveStartingStep(user, add): "otp" | "seeker-name" | "insider-name-email" | "role-choice" | null` (pure — `null` means "fully onboarded, redirect away per `resolveLanding`"). `createSeekerProfileAction`, `requestInsiderOtpAction`, `resendInsiderOtpAction` (no input), `verifyInsiderOtpAction`, each `() | (input) => Promise<{ ok: true } | { ok: false; problem: Problem }>`. `verifyInsiderOtpAction` redirects to a fixed `/insider/dashboard` on success (not via `resolveLanding`) — see Step 7.
 
 - [ ] **Step 1: Write the failing tests for `resolveStartingStep`**
 
@@ -602,7 +605,12 @@ vi.mock("@/src/lib/adapters", () => ({
   getAdapters: () => ({ db: testDb, email: testEmailSender }),
 }));
 
-import { createSeekerProfileAction, requestInsiderOtpAction, verifyInsiderOtpAction } from "./actions";
+import {
+  createSeekerProfileAction,
+  requestInsiderOtpAction,
+  resendInsiderOtpAction,
+  verifyInsiderOtpAction,
+} from "./actions";
 
 describe("onboard actions", () => {
   let seedCompany: ReturnType<typeof createFakeDatabase>["seedCompany"];
@@ -696,17 +704,65 @@ describe("onboard actions", () => {
       expect(result).toEqual({ ok: false, problem: expect.objectContaining({ type: "otp-invalid-or-expired" }) });
     });
 
-    it("redirects to /insider/dashboard using the state just written by this same request, not a stale cached user", async () => {
+    it("redirects to /insider/dashboard on a correct code", async () => {
       seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
       const user = await testDb.identity.findOrCreateUser("fb-onb-verify-2", "v2@x.com", "seeker");
-      // getCurrentUserMock stays frozen at "no Insider profile yet" for the whole test, proving the
-      // action does not rely on getCurrentUser() being re-called after verification succeeds.
       getCurrentUserMock.mockResolvedValue({ userId: user.id, role: "seeker", seekerProfileId: null, insiderProfile: null });
 
       await requestInsiderOtpAction({ fullName: "Rahul", workEmail: "v2@acme.com" });
       const code = emailSent[emailSent.length - 1]?.html.match(/\d{6}/)?.[0];
 
       await expect(verifyInsiderOtpAction({ code: code! })).rejects.toThrow("REDIRECT:/insider/dashboard");
+    });
+
+    it("redirects a both-role user (a Seeker who just verified as Insider) to /insider/dashboard, not /seeker/dashboard — resolveLanding would pick /seeker/dashboard here, which is why the redirect target is fixed rather than resolveLanding-derived", async () => {
+      seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+      const user = await testDb.identity.findOrCreateUser("fb-onb-verify-3", "v3@x.com", "seeker");
+      const { record: seekerProfile } = await testDb.identity.createOrGetSeekerProfile(user.id, "Already A Seeker");
+      getCurrentUserMock.mockResolvedValue({
+        userId: user.id,
+        role: "both",
+        seekerProfileId: seekerProfile.id,
+        insiderProfile: null,
+      });
+
+      await requestInsiderOtpAction({ fullName: "Rahul", workEmail: "v3@acme.com" });
+      const code = emailSent[emailSent.length - 1]?.html.match(/\d{6}/)?.[0];
+
+      await expect(verifyInsiderOtpAction({ code: code! })).rejects.toThrow("REDIRECT:/insider/dashboard");
+    });
+  });
+
+  describe("resendInsiderOtpAction", () => {
+    it("returns a problem when there is no session", async () => {
+      getCurrentUserMock.mockResolvedValue(null);
+      const result = await resendInsiderOtpAction();
+      expect(result).toEqual({ ok: false, problem: expect.objectContaining({ type: "auth-invalid-token" }) });
+    });
+
+    it("resends to the already-stored work email, with no form fields to re-supply — the resumed-OTP-step scenario (spec §4.9 row 1, a page reload mid-flow)", async () => {
+      seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+      const user = await testDb.identity.findOrCreateUser("fb-onb-resend-1", "rs1@x.com", "seeker");
+      getCurrentUserMock.mockResolvedValue({ userId: user.id, role: "seeker", seekerProfileId: null, insiderProfile: null });
+
+      await requestInsiderOtpAction({ fullName: "Rahul", workEmail: "rs1@acme.com" });
+      const result = await resendInsiderOtpAction();
+
+      expect(result).toEqual({ ok: true });
+      expect(emailSent).toHaveLength(2);
+      expect(emailSent[1].to).toBe("rs1@acme.com");
+    });
+
+    it("denies after the send rate limit is exceeded, sharing the same bucket as requestInsiderOtpAction", async () => {
+      seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+      const user = await testDb.identity.findOrCreateUser("fb-onb-resend-2", "rs2@x.com", "seeker");
+      getCurrentUserMock.mockResolvedValue({ userId: user.id, role: "seeker", seekerProfileId: null, insiderProfile: null });
+
+      await requestInsiderOtpAction({ fullName: "Rahul", workEmail: "rs2@acme.com" });
+      await resendInsiderOtpAction();
+      await resendInsiderOtpAction();
+      const fourth = await resendInsiderOtpAction();
+      expect(fourth).toEqual({ ok: false, problem: expect.objectContaining({ type: "rate-limited" }) });
     });
   });
 });
@@ -734,9 +790,8 @@ import {
 import {
   createOrGetSeekerProfile,
   requestWorkEmailOtp,
+  resendWorkEmailOtp,
   verifyWorkEmailOtpForUser,
-  resolveLanding,
-  getCurrentUserFromDb,
 } from "@/src/modules/identity/identity";
 import { getAdapters } from "@/src/lib/adapters";
 import { getCurrentUser } from "@/src/lib/current-user";
@@ -822,11 +877,37 @@ export async function verifyInsiderOtpAction(input: { code: string }): Promise<A
   const ok = await verifyWorkEmailOtpForUser({ db }, currentUser.userId, parsed.data.code);
   if (!ok) return { ok: false, problem: problem("otp-invalid-or-expired") };
 
-  // getCurrentUser() is request-scoped-cached and may have been called earlier in this same
-  // request, before verification flipped verifiedAt — re-read directly from the DB so the
-  // redirect reflects what was JUST written, not a stale cached CurrentUser.
-  const refreshedUser = await getCurrentUserFromDb({ db }, currentUser.userId);
-  redirect(refreshedUser ? resolveLanding(refreshedUser) : "/insider/dashboard");
+  // Fixed destination, not resolveLanding(refreshedUser): the common case reaching this line is
+  // a Seeker adding the Insider role (?add=insider), who already has a Seeker profile.
+  // resolveLanding prioritizes an existing Seeker profile over a verified Insider one (spec
+  // §4.2's third-pass fix), so deriving the redirect from it here would send this exact user to
+  // /seeker/dashboard right after they finished verifying as an Insider — the wrong outcome for
+  // an action whose whole purpose is Insider verification.
+  redirect("/insider/dashboard");
+}
+
+export async function resendInsiderOtpAction(): Promise<ActionResult> {
+  const currentUser = await getCurrentUser();
+  if (!currentUser) return { ok: false, problem: problem("auth-invalid-token") };
+  if (
+    !authorize(
+      { userId: currentUser.userId, role: currentUser.role },
+      "update",
+      { type: "insiderProfile", ownerUserId: currentUser.userId }
+    )
+  ) {
+    return { ok: false, problem: problem("auth-invalid-token") };
+  }
+
+  const requestHeaders = await headers();
+  if (!otpSendLimiter.check(limiterKey(currentUser.userId, requestHeaders))) {
+    return { ok: false, problem: problem("rate-limited") };
+  }
+
+  const { db, email } = getAdapters();
+  const result = await resendWorkEmailOtp({ db, email }, currentUser.userId);
+  if (!result) return { ok: false, problem: problem("auth-invalid-token") };
+  return { ok: true };
 }
 ```
 
@@ -843,11 +924,17 @@ Create `app/(public)/onboard/OnboardFlow.test.tsx`:
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { OnboardFlow } from "./OnboardFlow";
-import { createSeekerProfileAction, requestInsiderOtpAction, verifyInsiderOtpAction } from "./actions";
+import {
+  createSeekerProfileAction,
+  requestInsiderOtpAction,
+  resendInsiderOtpAction,
+  verifyInsiderOtpAction,
+} from "./actions";
 
 vi.mock("./actions", () => ({
   createSeekerProfileAction: vi.fn(),
   requestInsiderOtpAction: vi.fn(),
+  resendInsiderOtpAction: vi.fn(),
   verifyInsiderOtpAction: vi.fn(),
 }));
 
@@ -855,6 +942,7 @@ describe("OnboardFlow", () => {
   beforeEach(() => {
     vi.mocked(createSeekerProfileAction).mockReset();
     vi.mocked(requestInsiderOtpAction).mockReset();
+    vi.mocked(resendInsiderOtpAction).mockReset();
     vi.mocked(verifyInsiderOtpAction).mockReset();
   });
 
@@ -910,11 +998,12 @@ describe("OnboardFlow", () => {
     await waitFor(() => expect(verifyInsiderOtpAction).toHaveBeenCalledWith({ code: "123456" }));
   });
 
-  it("otp: Resend code calls requestInsiderOtpAction again", async () => {
-    vi.mocked(requestInsiderOtpAction).mockResolvedValue({ ok: true });
+  it("otp: Resend code calls resendInsiderOtpAction with no arguments, even on a resumed OTP step with no prior form state (spec §4.9 row 1)", async () => {
+    vi.mocked(resendInsiderOtpAction).mockResolvedValue({ ok: true });
     render(<OnboardFlow startingStep="otp" />);
     fireEvent.click(screen.getByRole("button", { name: "Resend code" }));
-    await waitFor(() => expect(requestInsiderOtpAction).toHaveBeenCalledOnce());
+    await waitFor(() => expect(resendInsiderOtpAction).toHaveBeenCalledWith());
+    expect(requestInsiderOtpAction).not.toHaveBeenCalled();
   });
 
   it("otp: Use a different email goes back to the Insider name+email step", () => {
@@ -943,9 +1032,15 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { createSeekerProfileAction, requestInsiderOtpAction, verifyInsiderOtpAction } from "./actions";
+import {
+  createSeekerProfileAction,
+  requestInsiderOtpAction,
+  resendInsiderOtpAction,
+  verifyInsiderOtpAction,
+} from "./actions";
 import type { OnboardStep } from "./step";
 import type { Problem } from "@/src/lib/problems";
+import { brand } from "@/src/config/brand";
 
 export function OnboardFlow({ startingStep }: { startingStep: OnboardStep }) {
   const [step, setStep] = useState<OnboardStep>(startingStep);
@@ -992,7 +1087,10 @@ export function OnboardFlow({ startingStep }: { startingStep: OnboardStep }) {
     e.preventDefault();
     setProblem(null);
     startTransition(async () => {
-      const result = await requestInsiderOtpAction({ fullName: insiderFullName, workEmail });
+      // No form fields to send: this step may have been reached by resuming a reload
+      // mid-flow (spec §4.9 row 1), where insiderFullName/workEmail were never filled in
+      // this session. resendInsiderOtpAction re-sends to the already-stored work email.
+      const result = await resendInsiderOtpAction();
       if (!result.ok) setProblem(result.problem);
     });
   }
@@ -1001,7 +1099,7 @@ export function OnboardFlow({ startingStep }: { startingStep: OnboardStep }) {
     <div className="survey-wrap">
       {step === "role-choice" && (
         <div>
-          <h1>How will you use GetNudgd?</h1>
+          <h1>How will you use {brand.name}?</h1>
           <div className="chips">
             <Chip onClick={() => setStep("seeker-name")}>I&apos;m looking for a job</Chip>
             <Chip onClick={() => setStep("insider-name-email")}>I&apos;m an Insider</Chip>
@@ -1715,12 +1813,43 @@ git commit -m "feat(dashboards): add placeholder Seeker/Insider/Admin dashboard 
 - Create: `playwright.browser.config.ts`
 - Create: `tests/e2e-browser/auth-onboarding.spec.ts`
 - Modify: `package.json` (add `test:e2e:browser` script)
+- Modify: `vitest.config.ts` (exclude the new browser-test directory)
+- Modify: `.gitignore` (the local dev-mailbox file)
 
 **Interfaces:**
 - Consumes: the whole flow built in Tasks 1–4, plus Plan A's `createFileMailboxEmailSender` (indirectly, via `DEV_MAILBOX_PATH`) and the seeded `acme.com` company (`scripts/seed.ts`).
-- Produces: a real, browser-driven Playwright config and spec — the first in this repo — isolated from the existing module-driven `tests/e2e/**` suite (own `testDir`, own `webServer`, no shared `globalSetup`).
+- Produces: a real, browser-driven Playwright config and spec — the first in this repo — isolated from the existing module-driven `tests/e2e/**` suite (own `testDir`, own `webServer`, no shared `globalSetup`) AND from Vitest's own default run.
 
-- [ ] **Step 1: Add the isolated Playwright config**
+- [ ] **Step 1: Exclude the new test directory from Vitest**
+
+`vitest.config.ts`'s `test.exclude` currently excludes `"**/tests/e2e/**"` only — that glob does not match `tests/e2e-browser/**`. Left as-is, `npm test` (`vitest run`) would pick up `tests/e2e-browser/auth-onboarding.spec.ts` under its default `*.spec.ts` include pattern and try to run Playwright's `test.describe`/`test`/`expect` inside Vitest, which fails immediately (they are a different test framework's globals) — breaking `npm test` and CI.
+
+In `vitest.config.ts`, change:
+
+```ts
+      "**/.worktrees/**",
+      "**/tests/e2e/**",
+    ],
+```
+
+to:
+
+```ts
+      "**/.worktrees/**",
+      "**/tests/e2e/**",
+      "**/tests/e2e-browser/**",
+    ],
+```
+
+Add to `.gitignore` (create the file if it doesn't already have an entries section for local artifacts; if `.gitignore` already exists, just append this line):
+
+```
+.playwright-mailbox.jsonl
+```
+
+This is the dev-mailbox file `playwright.browser.config.ts` (Step 2 below) points `DEV_MAILBOX_PATH` at — a local run artifact, never committed.
+
+- [ ] **Step 2: Add the isolated Playwright config**
 
 Create `playwright.browser.config.ts`:
 
@@ -1738,6 +1867,11 @@ export default defineConfig({
   timeout: 60_000,
   use: {
     baseURL: "http://localhost:3100",
+    // devLoginLimiter is keyed by IP alone pre-auth; every test in this run shares this one
+    // "IP" and therefore this one rate-limit bucket (5 logins/minute). The current 4 tests
+    // stay under that. Adding a 5th test, or a Playwright retry, pushes over it — if that
+    // happens, give each test its own value here instead of raising the limit.
+    extraHTTPHeaders: { "x-forwarded-for": "127.0.0.1" },
   },
   webServer: {
     command: "npm run dev -- -p 3100",
@@ -1757,7 +1891,7 @@ export default defineConfig({
 
 This file has no `globalSetup` (unlike `playwright.config.ts`) — each test seeds the exact state it needs directly, and there is nothing here to isolate the existing suite from, since this config's `webServer`/env are entirely separate from `tests/e2e/**`'s.
 
-- [ ] **Step 2: Add the test spec**
+- [ ] **Step 3: Add the test spec**
 
 Create `tests/e2e-browser/auth-onboarding.spec.ts`:
 
@@ -1848,7 +1982,7 @@ test.describe("auth and onboarding", () => {
 });
 ```
 
-- [ ] **Step 3: Add the npm script**
+- [ ] **Step 4: Add the npm script**
 
 In `package.json`, add to `"scripts"` (after the existing `"test:e2e": "playwright test",` line):
 
@@ -1856,7 +1990,7 @@ In `package.json`, add to `"scripts"` (after the existing `"test:e2e": "playwrig
     "test:e2e:browser": "playwright test --config=playwright.browser.config.ts",
 ```
 
-- [ ] **Step 4: Run it against a real dev Postgres**
+- [ ] **Step 5: Run it against a real dev Postgres**
 
 This test needs a running, migrated, seeded dev Postgres — the same one `tests/e2e/**` already uses. Run:
 
@@ -1869,15 +2003,15 @@ npm run test:e2e:browser
 
 Expected: all 4 tests pass. If `acme.com` isn't seeded (fresh database), `npm run db:seed` seeds it — `scripts/seed.ts`'s `PLACEHOLDER_COMPANIES` list seeds Acme Technologies with domain `acme.com` first, which is what the Insider test signs up against.
 
-- [ ] **Step 5: Typecheck**
+- [ ] **Step 6: Typecheck, and confirm `npm test` no longer touches the browser spec**
 
-Run: `npm run typecheck`
-Expected: no errors — `playwright.browser.config.ts` and `tests/e2e-browser/auth-onboarding.spec.ts` are picked up by the existing `**/*.ts` include pattern in `tsconfig.json`.
+Run: `npm run typecheck && npm test`
+Expected: typecheck clean — `playwright.browser.config.ts` and `tests/e2e-browser/auth-onboarding.spec.ts` are picked up by the existing `**/*.ts` include pattern in `tsconfig.json`. `npm test`'s output must show the same file/test counts as before this task (confirming Step 1's Vitest exclude actually keeps `tests/e2e-browser/**` out of the Vitest run) — if `npm test` instead errors trying to run Playwright's `test.describe` as a Vitest test, Step 1's exclude glob is wrong.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add playwright.browser.config.ts tests/e2e-browser package.json
+git add playwright.browser.config.ts tests/e2e-browser package.json vitest.config.ts .gitignore
 git commit -m "test(e2e): add the first browser-driven Playwright test, covering sign-in and onboarding for both roles"
 ```
 
@@ -1885,6 +2019,6 @@ git commit -m "test(e2e): add the first browser-driven Playwright test, covering
 
 ## Completion
 
-After Task 5, the full slice is live: a person can open `/login`, sign in, get routed through `/onboard` for their role, land on a real (if minimal) dashboard, and every one of the three app shells actually enforces who can be there — none of that was true before this plan. Run `npm run lint && npm run typecheck && npm test` once more, and separately run `npm run test:e2e:browser` against a seeded dev Postgres per Task 5 Step 4, and paste both outputs in the final report.
+After Task 5, the full slice is live: a person can open `/login`, sign in, get routed through `/onboard` for their role, land on a real (if minimal) dashboard, and every one of the three app shells actually enforces who can be there — none of that was true before this plan. Run `npm run lint && npm run typecheck && npm test` once more, and separately run `npm run test:e2e:browser` against a seeded dev Postgres per Task 5 Step 5, and paste both outputs in the final report.
 
 Screenshots for AGENTS.md §4.7's frontend definition-of-done (390px and 1280px) should be taken of `/login` and `/onboard` (role-choice step) once `npm run dev` is running locally, and attached to the task report.
