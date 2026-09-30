@@ -75,20 +75,20 @@ describe("getEnv", () => {
   });
 
   it("allows DEV_LOGIN_ENABLED=true when NODE_ENV=test, not just development", () => {
-    process.env.NODE_ENV = "test";
+    process.env = { ...process.env, NODE_ENV: "test" };
     process.env.DEV_LOGIN_ENABLED = "true";
     expect(() => getEnv()).not.toThrow();
     expect(getEnv().DEV_LOGIN_ENABLED).toBe(true);
   });
 
   it("throws when DEV_LOGIN_ENABLED=true and NODE_ENV=production", () => {
-    process.env.NODE_ENV = "production";
+    process.env = { ...process.env, NODE_ENV: "production" };
     process.env.DEV_LOGIN_ENABLED = "true";
     expect(() => getEnv()).toThrow(/DEV_LOGIN_ENABLED/);
   });
 
   it("throws when DEV_MAILBOX_PATH is set and NODE_ENV=production", () => {
-    process.env.NODE_ENV = "production";
+    process.env = { ...process.env, NODE_ENV: "production" };
     process.env.DEV_MAILBOX_PATH = "/tmp/mailbox.jsonl";
     expect(() => getEnv()).toThrow(/DEV_MAILBOX_PATH/);
   });

@@ -70,7 +70,7 @@ describe("getAdapters", () => {
   });
 
   it("uses the fake auth adapter when NODE_ENV=test, not the production-refusing one", async () => {
-    process.env.NODE_ENV = "test";
+    process.env = { ...process.env, NODE_ENV: "test" };
     resetEnvCacheForTests();
     const adapters = getAdapters();
     const token = Buffer.from(JSON.stringify({ providerUid: "fb-1", email: "a@b.com" })).toString("base64url");
@@ -78,7 +78,7 @@ describe("getAdapters", () => {
   });
 
   it("rejects every token in production, including an otherwise-valid fake token", async () => {
-    process.env.NODE_ENV = "production";
+    process.env = { ...process.env, NODE_ENV: "production" };
     resetEnvCacheForTests();
     const adapters = getAdapters();
     const token = Buffer.from(JSON.stringify({ providerUid: "fb-1", email: "a@b.com" })).toString("base64url");
