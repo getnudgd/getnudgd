@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     ".claude/**",
     ".worktrees/**",
+    "test-results/**",
+    "playwright-report/**",
   ]),
   {
     rules: {
