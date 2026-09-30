@@ -312,7 +312,13 @@ export function createRealDatabase(db: NodePgDatabase): Database {
         await db.update(insiderProfiles).set({ verifiedAt }).where(eq(insiderProfiles.id, insiderProfileId));
       },
       async storeWorkEmailOtp(insiderProfileId, codeHash, expiresAt) {
-        await db.insert(workEmailOtps).values({ insiderProfileId, codeHash, expiresAt });
+        await db.transaction(async (tx) => {
+          await tx
+            .update(workEmailOtps)
+            .set({ consumedAt: new Date() })
+            .where(and(eq(workEmailOtps.insiderProfileId, insiderProfileId), isNull(workEmailOtps.consumedAt)));
+          await tx.insert(workEmailOtps).values({ insiderProfileId, codeHash, expiresAt });
+        });
       },
       async consumeWorkEmailOtp(insiderProfileId, codeHash, now) {
         const [otp] = await db
@@ -337,6 +343,27 @@ export function createRealDatabase(db: NodePgDatabase): Database {
       async getSeekerProfileById(seekerProfileId) {
         const [row] = await db.select().from(seekerProfiles).where(eq(seekerProfiles.id, seekerProfileId));
         return (row as SeekerProfileRecord) ?? null;
+      },
+      async getSeekerProfileByUserId(userId) {
+        const [row] = await db.select().from(seekerProfiles).where(eq(seekerProfiles.userId, userId));
+        return (row as SeekerProfileRecord) ?? null;
+      },
+      async getInsiderProfileByUserId(userId) {
+        const [row] = await db.select().from(insiderProfiles).where(eq(insiderProfiles.userId, userId));
+        return (row as InsiderProfileRecord) ?? null;
+      },
+      async createOrGetSeekerProfile(userId, fullName) {
+        const [inserted] = await db
+          .insert(seekerProfiles)
+          .values({ userId, fullName })
+          .onConflictDoNothing({ target: seekerProfiles.userId })
+          .returning();
+        if (inserted) return { record: inserted as SeekerProfileRecord, created: true };
+        const [existing] = await db.select().from(seekerProfiles).where(eq(seekerProfiles.userId, userId));
+        if (!existing) {
+          throw new Error(`Seeker profile for user ${userId} vanished after a conflict`);
+        }
+        return { record: existing as SeekerProfileRecord, created: false };
       },
       async setUserRole(userId, role) {
         const [row] = await db.update(users).set({ role }).where(eq(users.id, userId)).returning();

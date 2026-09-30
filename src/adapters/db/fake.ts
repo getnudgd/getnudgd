@@ -213,6 +213,12 @@ export function createFakeDatabase(): {
         if (profile) profile.verifiedAt = verifiedAt;
       },
       async storeWorkEmailOtp(insiderProfileId: string, codeHash: string, expiresAt: Date) {
+        const invalidatedAt = new Date();
+        for (const otp of otps) {
+          if (otp.insiderProfileId === insiderProfileId && !otp.consumedAt) {
+            otp.consumedAt = invalidatedAt;
+          }
+        }
         otps.push({ insiderProfileId, codeHash, expiresAt, consumedAt: null });
       },
       async consumeWorkEmailOtp(insiderProfileId: string, codeHash: string, now: Date) {
@@ -228,6 +234,19 @@ export function createFakeDatabase(): {
       },
       async getSeekerProfileById(seekerProfileId: string) {
         return seekerProfiles.find((p) => p.id === seekerProfileId) ?? null;
+      },
+      async getSeekerProfileByUserId(userId: string) {
+        return seekerProfiles.find((p) => p.userId === userId) ?? null;
+      },
+      async getInsiderProfileByUserId(userId: string) {
+        return insiderProfiles.find((p) => p.userId === userId) ?? null;
+      },
+      async createOrGetSeekerProfile(userId: string, fullName: string) {
+        const existing = seekerProfiles.find((p) => p.userId === userId);
+        if (existing) return { record: existing, created: false };
+        const profile: SeekerProfileRecord = { id: genId(), userId, fullName };
+        seekerProfiles.push(profile);
+        return { record: profile, created: true };
       },
       async setUserRole(userId: string, role: Role) {
         const user = users.find((u) => u.id === userId);
