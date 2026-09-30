@@ -6,6 +6,7 @@ import {
   RequestStateConflictError,
   InsufficientPointsError,
   RedemptionAlreadyResolvedError,
+  InsiderProfileAlreadyVerifiedError,
   assertSingleCurrency,
 } from "./types";
 
@@ -192,6 +193,20 @@ describe("createFakeDatabase identity", () => {
     const { db, seedCompany } = createFakeDatabase();
     const beta = seedCompany({ name: "Beta", tier: "tier2" }, ["beta.com"]);
     await expect(db.identity.updateInsiderProfileCompany("nope", beta.id, "x@beta.com")).rejects.toThrow();
+  });
+
+  it("refuses to change company for an already-verified profile, even when called directly (bypassing the module-level check)", async () => {
+    const { db, seedCompany } = createFakeDatabase();
+    const acme = seedCompany({ name: "Acme", tier: "tier1" }, ["acme.com"]);
+    const beta = seedCompany({ name: "Beta", tier: "tier2" }, ["beta.com"]);
+    const user = await db.identity.findOrCreateUser("fb-verified-guard-1", "vg1@acme.com", "seeker");
+    const profile = await db.identity.findOrCreateInsiderProfile(user.id, acme.id, "vg1@acme.com");
+    await db.identity.markInsiderVerified(profile.id, new Date());
+
+    await expect(db.identity.updateInsiderProfileCompany(profile.id, beta.id, "vg1@beta.com")).rejects.toThrow(
+      InsiderProfileAlreadyVerifiedError
+    );
+    expect((await db.identity.getInsiderProfileById(profile.id))?.companyId).toBe(acme.id);
   });
 
   it("gets a seeker profile by id, and returns null when not found", async () => {

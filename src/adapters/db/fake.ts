@@ -28,6 +28,7 @@ import {
   RewardRedemptionRecord,
   InsufficientPointsError,
   RedemptionAlreadyResolvedError,
+  InsiderProfileAlreadyVerifiedError,
   assertSingleCurrency,
   assertValidTrancheInput,
 } from "./types";
@@ -199,6 +200,7 @@ export function createFakeDatabase(): {
       async updateInsiderProfileCompany(insiderProfileId: string, companyId: string, workEmail: string) {
         const profile = insiderProfiles.find((p) => p.id === insiderProfileId);
         if (!profile) throw new Error(`Insider profile ${insiderProfileId} not found`);
+        if (profile.verifiedAt !== null) throw new InsiderProfileAlreadyVerifiedError(insiderProfileId);
         profile.companyId = companyId;
         profile.workEmail = workEmail;
         return profile;

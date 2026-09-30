@@ -5,12 +5,14 @@
 //
 // Exercises identity DB methods that need real Postgres behavior a fake cannot prove:
 // createOrGetSeekerProfile's ON CONFLICT race-safety under an actual concurrent double-submit,
-// and storeWorkEmailOtp's prior-code invalidation inside a real transaction.
+// storeWorkEmailOtp's prior-code invalidation inside a real transaction, consumeWorkEmailOtp's
+// atomic UPDATE...WHERE...RETURNING under a real concurrent double-consume, and
+// updateInsiderProfileCompany's verified_at IS NULL guard against a real Postgres row.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { createRealDatabase } from "./real";
-import type { Database } from "./types";
+import { InsiderProfileAlreadyVerifiedError, type Database } from "./types";
 
 const live = process.env.RUN_VENDOR_TESTS === "1";
 
@@ -69,5 +71,27 @@ describe.skipIf(!live)("identity DB methods against real Postgres", () => {
     const userId = await makeUser();
     expect(await db.identity.getSeekerProfileByUserId(userId)).toBeNull();
     expect(await db.identity.getInsiderProfileByUserId(userId)).toBeNull();
+  });
+
+  it("consumeWorkEmailOtp is atomic: a concurrent double-consume of the same code succeeds exactly once", async () => {
+    const userId = await makeUser();
+    const profile = await db.identity.findOrCreateInsiderProfile(userId, companyId, `insider-atomic-${tag}@acme.com`);
+    await db.identity.storeWorkEmailOtp(profile.id, "hash-race", new Date(Date.now() + 60_000));
+
+    const [a, b] = await Promise.all([
+      db.identity.consumeWorkEmailOtp(profile.id, "hash-race", new Date()),
+      db.identity.consumeWorkEmailOtp(profile.id, "hash-race", new Date()),
+    ]);
+    expect([a, b].filter(Boolean)).toHaveLength(1);
+  });
+
+  it("updateInsiderProfileCompany refuses to change company for an already-verified profile, in real Postgres", async () => {
+    const userId = await makeUser();
+    const profile = await db.identity.findOrCreateInsiderProfile(userId, companyId, `insider-verified-${tag}@acme.com`);
+    await db.identity.markInsiderVerified(profile.id, new Date());
+
+    await expect(
+      db.identity.updateInsiderProfileCompany(profile.id, companyId, `insider-verified-${tag}-changed@acme.com`)
+    ).rejects.toThrow(InsiderProfileAlreadyVerifiedError);
   });
 });

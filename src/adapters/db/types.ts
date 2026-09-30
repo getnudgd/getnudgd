@@ -305,6 +305,13 @@ export class RequestStateConflictError extends Error {
   }
 }
 
+export class InsiderProfileAlreadyVerifiedError extends Error {
+  constructor(insiderProfileId: string) {
+    super(`Insider profile ${insiderProfileId} is already verified — its company can no longer be changed`);
+    this.name = "InsiderProfileAlreadyVerifiedError";
+  }
+}
+
 export interface Database {
   ledger: {
     postTxn(input: PostLedgerTxnInput): Promise<LedgerTxnRecord>;
