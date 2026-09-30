@@ -8,12 +8,12 @@ import {
   waitUntil,
   type E2eContext,
 } from "./fixtures";
-import { sendRequest, decline, type RequestsDeps } from "../../src/modules/requests/requests";
+import { sendRequest, expire, type RequestsDeps } from "../../src/modules/requests/requests";
 import { getRulesWithVersion } from "../../src/modules/config/config";
 
 const tag = Date.now().toString(36);
 
-test.describe("Flow B: send -> decline -> refund", () => {
+test.describe("Flow C: send -> expire -> refund", () => {
   let ctx: E2eContext;
 
   test.beforeAll(async () => {
@@ -24,7 +24,7 @@ test.describe("Flow B: send -> decline -> refund", () => {
     await ctx.teardown();
   });
 
-  test("a declined request refunds the seeker per the request's own stamped rules version", async () => {
+  test("calling expire() directly (what the real 48h timer job calls) refunds the seeker", async () => {
     const seeker = await seedFundedSeeker(ctx, tag, 1);
     const insider = await seedVerifiedInsider(ctx, tag, 1);
     const deps: RequestsDeps = { db: ctx.db, queue: ctx.queue };
@@ -32,27 +32,24 @@ test.describe("Flow B: send -> decline -> refund", () => {
     const balanceBefore = await ctx.db.ledger.getBalance("seeker", seeker.profileId, "credits");
 
     const request = await sendRequest(deps, {
-      idempotencyKey: `e2e:${tag}:flowB:send`,
+      idempotencyKey: `e2e:${tag}:flowC:send`,
       seekerProfileId: seeker.profileId,
       insiderProfileId: insider.profileId,
     });
 
-    const declined = await decline(deps, request.id);
-    expect(declined.state).toBe("DECLINED");
+    // expire() IS the unit of work the real request.expire pg-boss job calls when its
+    // 48h timer fires. Calling it directly proves the outcome without waiting 48 real
+    // hours — there is nothing left to prove by actually waiting.
+    const expired = await expire(deps, request.id);
+    expect(expired.state).toBe("EXPIRED");
 
-    // Never a literal percentage: read the rules this specific request was stamped
-    // with, the same rules version decline() itself used.
     const { rules } = await getRulesWithVersion(deps, request.rulesVersion);
-    const expectedRefund = Math.round((request.creditCost * rules.refundPercentOnDecline) / 100);
+    const expectedRefund = Math.round((request.creditCost * rules.refundPercentOnExpiry) / 100);
 
     const balanceAfter = await ctx.db.ledger.getBalance("seeker", seeker.profileId, "credits");
     expect(balanceAfter).toBe(balanceBefore - request.creditCost + expectedRefund);
 
-    // request.expire's own 48h timer job is still scheduled at this point — that is
-    // expected, not a leak. It will fire later and no-op, because expire()'s own
-    // guard checks state !== "SENT" before doing anything.
-
-    const key = notificationKey(`request:${request.id}:decline`, "request.declined", seeker.userId);
+    const key = notificationKey(`request:${request.id}:expire`, "request.expired", seeker.userId);
     await waitUntil(
       async () => (await findNotification(ctx.pool, key))?.status === "sent",
       30_000,
