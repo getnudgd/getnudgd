@@ -22,6 +22,7 @@ export default defineConfig({
       "**/.claude/**",
       "**/.worktrees/**",
       "**/tests/e2e/**",
+      "**/tests/e2e-browser/**",
     ],
   },
 });
