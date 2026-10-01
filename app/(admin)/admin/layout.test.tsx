@@ -43,4 +43,11 @@ describe("AdminLayout", () => {
     render(element);
     expect(screen.getByText("Requests queue")).toBeInTheDocument();
   });
+
+  it("gives the admin a way to log out, same as the Seeker and Insider shells", async () => {
+    getCurrentUserMock.mockResolvedValue({ userId: "admin-1", role: "admin", seekerProfileId: null, insiderProfile: null });
+    const element = await AdminLayout({ children: <p>Requests queue</p> });
+    render(element);
+    expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
+  });
 });

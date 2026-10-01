@@ -9,6 +9,10 @@ export default defineConfig({
   workers: 1,
   reporter: "list",
   timeout: 60_000,
+  // Default expect() timeout (5s) is too tight here: each toHaveURL() assertion waits on a
+  // server action's DB round trip plus the redirect target's first-ever compile under `next
+  // dev` (cold on every run, since webServer.reuseExistingServer is false) — easily over 5s.
+  expect: { timeout: 30_000 },
   use: {
     baseURL: "http://localhost:3100",
     // devLoginLimiter is keyed by IP alone pre-auth; every test in this run shares this one
